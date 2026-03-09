@@ -1,0 +1,5 @@
+{
+  "name": "CotaMaster - Gestão de Cotas e Produtos",
+  "description": "Plataforma completa para gestão de produtos fracionados em cotas, com múltiplos níveis de acesso, sistema de reorganização de cotas, chat exclusivo e controle financeiro.",
+  "requestFramePermissions": []
+}
