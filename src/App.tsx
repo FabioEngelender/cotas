@@ -24,7 +24,8 @@ import {
   Trash2,
   Check,
   Share,
-  UserPlus
+  UserPlus,
+  Clover
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { io } from 'socket.io-client';
@@ -55,6 +56,14 @@ const maskPhone = (value: string) => {
     .replace(/(\d{3})(\d)/, '$1-$2')
     .replace(/(\d{3})(\d)/, '$1-$2')
     .replace(/(\d{3})\d+?$/, '$1');
+};
+
+const maskCEP = (value: string) => {
+  return value
+    .replace(/\D/g, '')
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1-$2')
+    .replace(/(-\d{3})\d+?$/, '$1');
 };
 
 // --- Auth Context ---
@@ -302,7 +311,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
       <main className="flex-1 overflow-y-auto p-8">
         <Routes>
           <Route path="/" element={user.role === 'admin' ? <Navigate to="/dashboard" /> : <ProductsList />} />
-          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/dashboard" element={user.role === 'admin' ? <Dashboard /> : <Navigate to="/products" />} />
           <Route path="/products" element={<ProductsList />} />
           <Route path="/products/:id" element={<ProductDetail />} />
           <Route path="/products/:id/chat" element={<ProductChat />} />
@@ -404,7 +413,7 @@ function TenantSelection() {
         </div>
 
         <div className="flex flex-col items-center gap-6">
-          {tenants.map((tenant) => (
+          {tenants.filter(t => t.name !== 'CotaMaster Matriz').map((tenant) => (
             <motion.button
               key={tenant.id}
               whileHover={{ scale: 1.02 }}
@@ -435,6 +444,38 @@ function TenantSelection() {
               </div>
             </motion.button>
           ))}
+        </div>
+
+        <div className="mt-20 text-center space-y-4">
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#141414]/30">
+            Termo de Uso Simplificado
+          </div>
+          <p className="max-w-md mx-auto text-[11px] leading-relaxed text-[#141414]/40 italic">
+            Ao acessar qualquer loja deste sistema, você concorda com o processamento de seus dados para fins de gestão de cotas e comunicações relacionadas, conforme a LGPD.
+          </p>
+
+          <div className="pt-4 flex flex-col items-center gap-4">
+            {tenants.find(t => t.name === 'CotaMaster Matriz') && (
+              <button 
+                onClick={() => setTenantId(tenants.find(t => t.name === 'CotaMaster Matriz').id)}
+                className="group flex flex-col items-center gap-2 transition-all"
+              >
+                <Clover className="w-5 h-5 text-emerald-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]" strokeWidth={1.5} />
+              </button>
+            )}
+          </div>
+          
+          <div className="pt-8">
+            <button 
+              onClick={() => {
+                const master = tenants.find(t => t.name.toLowerCase().includes('matriz') || t.id === 1);
+                if (master) setTenantId(master.id);
+              }}
+              className="p-4 opacity-0 hover:opacity-10 transition-none cursor-default"
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
         </div>
 
         {tenants.length === 0 && !showCreate && (
@@ -563,7 +604,7 @@ function Login() {
             )}
             <div>
               <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
-                Nome (Admin/Gerente) ou E-mail (Cliente)
+                Nome, E-mail ou CPF
               </label>
               <input
                 type="text"
@@ -642,6 +683,9 @@ function RegisterClient() {
     cpf: '', 
     phone: '', 
     address: '', 
+    address_number: '',
+    address_complement: '',
+    address_cep: '',
     pix_key: '' 
   });
   const [error, setError] = useState('');
@@ -693,7 +737,9 @@ function RegisterClient() {
             )}
             
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Nome Completo</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                Nome Completo <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={formData.name}
@@ -704,17 +750,21 @@ function RegisterClient() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">E-mail</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  E-mail <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="email"
                   value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  onChange={(e) => setFormData({...formData, email: e.target.value.toLowerCase()})}
                   className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
                   required
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Senha</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  Senha <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="password"
                   value={formData.password}
@@ -726,28 +776,36 @@ function RegisterClient() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">CPF</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  CPF <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.cpf}
-                  onChange={(e) => setFormData({...formData, cpf: e.target.value})}
+                  onChange={(e) => setFormData({...formData, cpf: maskCPF(e.target.value)})}
+                  placeholder="000.000.000-00"
                   className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
                   required
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Telefone</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  Telefone <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.phone}
-                  onChange={(e) => setFormData({...formData, phone: e.target.value})}
+                  onChange={(e) => setFormData({...formData, phone: maskPhone(e.target.value)})}
+                  placeholder="(00)000-000-000"
                   className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
                   required
                 />
               </div>
             </div>
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Endereço</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                Endereço (Rua/Avenida) <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={formData.address}
@@ -756,8 +814,46 @@ function RegisterClient() {
                 required
               />
             </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  N° <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.address_number}
+                  onChange={(e) => setFormData({...formData, address_number: e.target.value})}
+                  className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Comp.</label>
+                <input
+                  type="text"
+                  value={formData.address_complement}
+                  onChange={(e) => setFormData({...formData, address_complement: e.target.value})}
+                  className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  CEP <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.address_cep}
+                  onChange={(e) => setFormData({...formData, address_cep: maskCEP(e.target.value)})}
+                  placeholder="00.000-000"
+                  className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
+                  required
+                />
+              </div>
+            </div>
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">Chave PIX</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                Chave PIX <span className="text-red-500">*</span>
+              </label>
               <input
                 type="text"
                 value={formData.pix_key}
@@ -864,7 +960,7 @@ function RegisterTenant() {
               <input
                 type="email"
                 value={formData.adminEmail}
-                onChange={(e) => setFormData({...formData, adminEmail: e.target.value})}
+                onChange={(e) => setFormData({...formData, adminEmail: e.target.value.toLowerCase()})}
                 className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
                 required
               />
@@ -1011,7 +1107,7 @@ function RegisterManager() {
               <input
                 type="email"
                 value={formData.email}
-                onChange={(e) => setFormData({...formData, email: e.target.value})}
+                onChange={(e) => setFormData({...formData, email: e.target.value.toLowerCase()})}
                 className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
                 required
               />
@@ -1049,6 +1145,9 @@ function Register() {
     cpf: '',
     phone: '',
     address: '',
+    address_number: '',
+    address_complement: '',
+    address_cep: '',
     pix_key: ''
   });
   const [error, setError] = useState('');
@@ -1108,7 +1207,9 @@ function Register() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Nome Completo</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Nome Completo <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.name}
@@ -1118,17 +1219,21 @@ function Register() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">E-mail</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  E-mail <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="email"
                   value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  onChange={(e) => setFormData({...formData, email: e.target.value.toLowerCase()})}
                   className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
                   required
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Senha</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Senha <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="password"
                   value={formData.password}
@@ -1138,7 +1243,9 @@ function Register() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">CPF</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  CPF <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.cpf}
@@ -1149,7 +1256,9 @@ function Register() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Telefone</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Telefone <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.phone}
@@ -1160,7 +1269,24 @@ function Register() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Endereço</label>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Chave PIX <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.pix_key}
+                  onChange={(e) => setFormData({...formData, pix_key: e.target.value})}
+                  className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Endereço (Rua/Avenida) <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
                   value={formData.address}
@@ -1169,15 +1295,41 @@ function Register() {
                   required
                 />
               </div>
-              <div className="md:col-span-2">
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Chave PIX</label>
-                <input
-                  type="text"
-                  value={formData.pix_key}
-                  onChange={(e) => setFormData({...formData, pix_key: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
-                  required
-                />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                    N° <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.address_number}
+                    onChange={(e) => setFormData({...formData, address_number: e.target.value})}
+                    className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Complemento</label>
+                  <input
+                    type="text"
+                    value={formData.address_complement}
+                    onChange={(e) => setFormData({...formData, address_complement: e.target.value})}
+                    className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                    CEP <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.address_cep}
+                    onChange={(e) => setFormData({...formData, address_cep: maskCEP(e.target.value)})}
+                    placeholder="00.000-000"
+                    className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                    required
+                  />
+                </div>
               </div>
             </div>
 
@@ -2151,53 +2303,94 @@ function ProductDetail() {
 
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 14;
+    let cursorY = 20;
+
+    // 1. Term Section
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+    cursorY += 10;
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(50, 50, 50);
+    const splitTerm = doc.splitTextToSize(termContent, pageWidth - (margin * 2));
     
-    // Header
-    doc.setFontSize(22);
-    doc.setTextColor(0, 0, 0);
-    doc.text("COMPROVANTE DE AQUISIÇÃO", pageWidth / 2, 20, { align: 'center' });
-    
-    doc.setFontSize(10);
-    doc.setTextColor(100, 100, 100);
-    doc.text("CotaMaster - Sistema de Gestão de Cotas", pageWidth / 2, 28, { align: 'center' });
-    
+    for (let i = 0; i < splitTerm.length; i++) {
+      if (cursorY > pageHeight - 30) {
+        doc.addPage();
+        cursorY = 20;
+      }
+      doc.text(splitTerm[i], margin, cursorY);
+      cursorY += 5;
+    }
+
+    cursorY += 10;
+    if (cursorY > pageHeight - 60) {
+      doc.addPage();
+      cursorY = 20;
+    }
+
+    // 2. Purchase Details
     doc.setDrawColor(200, 200, 200);
-    doc.line(14, 35, pageWidth - 14, 35);
-    
-    // Purchase Details
+    doc.line(margin, cursorY, pageWidth - margin, cursorY);
+    cursorY += 10;
+
     doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
     doc.setTextColor(0, 0, 0);
-    doc.text("Detalhes da Aquisição", 14, 45);
+    doc.text("DETALHES DA AQUISIÇÃO", margin, cursorY);
+    cursorY += 10;
     
     doc.setFontSize(11);
-    doc.text(`Produto: ${product?.name}`, 14, 55);
-    doc.text(`Cotas: ${quotasStr}`, 14, 62);
-    doc.text(`Valor Total: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, 14, 69);
-    doc.text(`Parcelamento: ${installmentCount}x de ${(totalValue / installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, 14, 76);
-    
-    // Signature Info
-    doc.text(`Assinado por: ${user?.name}`, 14, 90);
-    doc.text(`Data: ${new Date().toLocaleString('pt-BR')}`, 14, 97);
-    doc.text(`ID do Usuário: ${user?.id}`, 14, 104);
-    
-    doc.line(14, 115, pageWidth - 14, 115);
-    
-    // Term Section
+    doc.setFont("helvetica", "normal");
+    doc.text(`Produto: ${product?.name}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Cotas: ${quotasStr}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Valor Total: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Parcelamento: ${installmentCount}x de ${(totalValue / installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+    cursorY += 15;
+
+    if (cursorY > pageHeight - 40) {
+      doc.addPage();
+      cursorY = 20;
+    }
+
+    // 3. Signature Info
     doc.setFontSize(14);
-    doc.text("TERMO DE ADESÃO", 14, 125);
+    doc.setFont("helvetica", "bold");
+    doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+    cursorY += 10;
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Participante: ${user?.name}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Data do Aceite: ${new Date().toLocaleString('pt-BR')}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Autenticação: ${user?.id}-${Date.now()}`, margin, cursorY);
     
-    doc.setFontSize(9);
-    doc.setTextColor(50, 50, 50);
-    const splitTerm = doc.splitTextToSize(termContent, pageWidth - 28);
-    doc.text(splitTerm, 14, 135);
+    // Footer on each page
+    const pageCount = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(
+        `Página ${i} de ${pageCount} - Este documento é um registro eletrônico e possui validade jurídica.`, 
+        pageWidth / 2, 
+        pageHeight - 10, 
+        { align: 'center' }
+      );
+    }
     
-    // Footer
-    const footerY = doc.internal.pageSize.getHeight() - 20;
-    doc.setFontSize(8);
-    doc.setTextColor(150, 150, 150);
-    doc.text("Este documento é um registro eletrônico e possui validade jurídica conforme os termos aceitos.", pageWidth / 2, footerY, { align: 'center' });
-    
-    doc.save(`comprovante_${product?.name?.replace(/\s+/g, '_')}.pdf`);
+    doc.save(`termo_adesao_${product?.name?.replace(/\s+/g, '_')}.pdf`);
   };
 
   const handleCancelSale = async (quotaId: number) => {
@@ -2266,8 +2459,8 @@ function ProductDetail() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="p-2 hover:bg-black/5 rounded-full">
-            <X size={24} />
+          <button onClick={() => navigate('/products')} className="flex items-center gap-2 px-4 py-2 hover:bg-black/5 rounded-xl transition-all font-bold text-sm">
+            <ArrowLeft size={20} />
           </button>
           <h2 className="text-3xl font-bold tracking-tight">{product.name}</h2>
         </div>
@@ -2713,6 +2906,17 @@ function ProductChat() {
     setInput('');
   };
 
+  const [product, setProduct] = useState<Product | null>(null);
+
+  useEffect(() => {
+    apiFetch('/api/products')
+      .then(res => res.json())
+      .then(data => {
+        const p = data.find((x: any) => x.id === Number(id));
+        setProduct(p);
+      });
+  }, [id]);
+
   return (
     <div className="h-full flex flex-col bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
       <div className="p-6 border-b border-black/5 flex items-center justify-between">
@@ -2720,7 +2924,7 @@ function ProductChat() {
           <Link to={`/products/${id}`} className="p-2 hover:bg-black/5 rounded-full transition-all">
             <ArrowLeft size={20} />
           </Link>
-          <h3 className="font-bold text-xl">Chat do Produto #{id}</h3>
+          <h3 className="font-bold text-xl">Chat do Produto {product ? `(${product.name})` : `#${id}`}</h3>
         </div>
         <span className="text-xs font-bold uppercase tracking-widest opacity-40">Apenas primeiro nome visível</span>
       </div>
@@ -2767,6 +2971,7 @@ function ClientsList() {
   const [clients, setClients] = useState<User[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedUserDetails, setSelectedUserDetails] = useState<any>(null);
+  const [termContent, setTermContent] = useState('');
   const [newUser, setNewUser] = useState({ name: '', email: '', password: 'user123', role: 'client' as Role, cpf: '', pix_key: '' });
   const { user } = React.useContext(AuthContext)!;
 
@@ -2778,7 +2983,72 @@ function ClientsList() {
 
   useEffect(() => {
     fetchUsers();
+    apiFetch('/api/terms')
+      .then(res => res.json())
+      .then(data => setTermContent(data.content))
+      .catch(console.error);
   }, []);
+
+  const downloadClientTerm = (client: User, products: any[]) => {
+    if (!client.signed_term_at) return alert('Este cliente ainda não assinou o termo.');
+    
+    const quotasStr = products.map((p: any) => `${p.quotaCount} cota(s) de ${p.name}`).join(', ');
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 14;
+    let cursorY = 20;
+
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+    cursorY += 10;
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(50, 50, 50);
+    const splitTerm = doc.splitTextToSize(termContent, pageWidth - (margin * 2));
+    
+    for (let i = 0; i < splitTerm.length; i++) {
+      if (cursorY > pageHeight - 40) {
+        doc.addPage();
+        cursorY = 20;
+      }
+      doc.text(splitTerm[i], margin, cursorY);
+      cursorY += 5;
+    }
+
+    cursorY += 10;
+    if (cursorY > pageHeight - 60) {
+      doc.addPage();
+      cursorY = 20;
+    }
+
+    doc.setDrawColor(200, 200, 200);
+    doc.line(margin, cursorY, pageWidth - margin, cursorY);
+    cursorY += 10;
+
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+    cursorY += 10;
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Participante: ${client.name}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`CPF: ${client.cpf || 'Não informado'}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Data do Aceite: ${new Date(client.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Produtos/Cotas: ${quotasStr || 'Nenhuma cota registrada no momento da assinatura.'}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Autenticação Digital ID: ${client.id}-${new Date(client.signed_term_at).getTime()}`, margin, cursorY);
+    
+    doc.save(`termo_assinado_${client.name.replace(/\s+/g, '_').toLowerCase()}.pdf`);
+  };
 
   const fetchUserDetails = async (id: number) => {
     try {
@@ -2947,6 +3217,17 @@ function ClientsList() {
                     <p className="font-medium">{selectedUserDetails.user.pix_key || '-'}</p>
                   </div>
                 </div>
+
+                {selectedUserDetails.user.signed_term_at && (
+                  <div className="pt-4 border-t border-black/5">
+                    <button 
+                      onClick={() => downloadClientTerm(selectedUserDetails.user, selectedUserDetails.products)}
+                      className="w-full flex items-center justify-center gap-2 px-6 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
+                    >
+                      <FileText size={20} /> Termo Assinado
+                    </button>
+                  </div>
+                )}
 
                 <div className="space-y-4">
                   <h4 className="font-bold text-lg">Produtos Adquiridos</h4>

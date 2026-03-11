@@ -3,9 +3,13 @@ import { createServer as createViteServer } from "vite";
 import { Server } from "socket.io";
 import http from "http";
 import path from "path";
+import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -243,6 +247,17 @@ try {
 } catch (e) {}
 try {
   db.prepare("ALTER TABLE users ADD COLUMN address TEXT").run();
+} catch (e) {}
+
+// Migration: Add address subfields to users
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN address_number TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN address_complement TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE users ADD COLUMN address_cep TEXT").run();
 } catch (e) {}
 
 // Seed Admin if not exists for default tenant
@@ -536,7 +551,80 @@ app.get("/api/stats", authenticate, (req: any, res) => {
 
 app.get("/api/terms", authenticate, (req: any, res) => {
   const term = db.prepare("SELECT * FROM terms WHERE is_active = 1 AND tenant_id = ? ORDER BY created_at DESC LIMIT 1").get(req.tenantId);
-  res.json(term || { content: "Pelo presente instrumento particular, o CLIENTE declara estar ciente das regras de aquisição de cotas..." });
+  res.json(term || { content: `TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO – ACEITE ELETRÔNICO
+
+Ao selecionar a opção “Estou ciente e concordo”, o PARTICIPANTE declara ter lido integralmente o presente Termo de Cientificação e Adesão, manifestando concordância com todas as suas cláusulas, nos termos da legislação brasileira aplicável, especialmente da Lei nº 8.078/1990 (Código de Defesa do Consumidor), da Lei nº 13.756/2018 e da Lei nº 14.063/2020.
+
+1. DO OBJETO
+
+1.1. O presente termo regula a participação voluntária do PARTICIPANTE em bolão, consistente na aquisição de uma ou mais cotas de participação em apostas coletivas realizadas pela ORGANIZADORA em jogos de prognóstico numérico administrados por entidade autorizada.
+
+1.2. Cada cota adquirida representa uma fração proporcional do valor destinado às apostas e confere ao PARTICIPANTE, caso haja premiação, direito ao rateio proporcional do prêmio líquido, de acordo com a quantidade de cotas integralmente quitadas.
+
+2. DA NATUREZA ALEATÓRIA DAS APOSTAS
+
+2.1. O PARTICIPANTE declara estar plenamente ciente de que as apostas realizadas no âmbito do bolão estão vinculadas a jogos de prognóstico, cujo resultado depende exclusivamente de fatores aleatórios e imprevisíveis.
+
+2.2. A ORGANIZADORA não garante qualquer premiação, lucro ou retorno financeiro, sendo sua responsabilidade limitada à organização do bolão e à realização das apostas correspondentes às cotas adquiridas.
+
+3. DA AQUISIÇÃO DE COTAS
+
+3.1. O PARTICIPANTE poderá adquirir quantas cotas desejar, observada a disponibilidade definida pela ORGANIZADORA.
+
+3.2. O valor de cada cota, o número total de cotas do bolão e as condições de pagamento serão previamente informados antes da confirmação da adesão.
+
+3.3. A participação somente será considerada válida após a confirmação da aquisição das cotas pelo sistema utilizado pela ORGANIZADORA.
+
+4. DO PAGAMENTO
+
+4.1. O pagamento das cotas poderá ocorrer à vista ou de forma parcelada, conforme condições previamente informadas.
+
+4.2. O PARTICIPANTE reconhece que a quitação integral das cotas adquiridas é condição obrigatória para manutenção do direito ao eventual rateio de premiação.
+
+4.3. O não pagamento de qualquer parcela dentro do prazo estipulado implicará automaticamente:
+
+I – na exclusão do PARTICIPANTE do rateio de eventual prêmio referente às cotas inadimplentes;
+II – na perda do direito de participação vinculada às cotas não quitadas;
+III – na possibilidade de redistribuição dessas cotas pela ORGANIZADORA.
+
+4.4. Valores eventualmente pagos poderão ser utilizados na composição das apostas realizadas, não havendo obrigação de residência caso o participante seja excluído por inadimplência.
+
+5. DO RATEIO DE EVENTUAL PREMIAÇÃO
+
+5.1. Caso as apostas realizadas pelo bolão sejam contempladas com premiação, o valor recebido será rateado proporcionalmente ao número de cotas integralmente quitadas de cada participante.
+
+5.2. O pagamento da quota-parte ocorrerá após o recebimento da premiação pela ORGANIZADORA junto à instituição responsável pela loteria oficial, como a Caixa Econômica Federal.
+
+5.3. Eventuais tributos ou encargos legais incidentes sobre a premiação observarão a legislação vigente.
+
+6. DAS OBRIGAÇÕES DO PARTICIPANTE
+
+Constituem obrigações do PARTICIPANTE:
+
+I – fornecer dados verdadeiros e atualizados no momento da adesão;
+II – cumprir rigorosamente os prazos e condições de pagamento das cotas adquiridas;
+III – acompanhar as informações e comunicados relativos ao bolão;
+IV – respeitar integralmente as regras estabelecidas neste termo.
+
+7. DO ACEITE ELETRÔNICO
+
+7.1. A manifestação de concordância realizada por meio eletrônico, mediante seleção da opção “Estou ciente e concordo”, será considerada aceite válido e juridicamente vinculante, produzindo os mesmos efeitos legais de assinatura manuscrita, conforme a Lei nº 14.063/2020.
+
+7.2. O sistema poderá registrar automaticamente informações de autenticação do aceite, incluindo, quando aplicável:
+data e horário do aceite;
+endereço IP do dispositivo utilizado;
+identificação do participante no sistema;
+registro eletrônico da concordância.
+
+8. DISPOSIÇÕES FINAIS
+
+8.1. O PARTICIPANTE declara ter recebido informações claras e suficientes acerca do funcionamento do bolão, compreendendo os riscos inerentes às apostas.
+
+8.2. Eventuais omissões serão resolvidas conforme a legislação brasileira aplicável, especialmente o Código Civil Brasileiro e a Lei nº 8.078/1990 (Código de Defesa do Consumidor).
+
+ACEITE ELETRÔNICO DO PARTICIPANTE
+
+Ao clicar em “Estou ciente e concordo”, o PARTICIPANTE declara que leu, compreendeu e concorda integralmente com todos os termos deste documento.` });
 });
 
 app.post("/api/terms", authenticate, (req: any, res) => {
@@ -595,22 +683,19 @@ app.post("/api/login", (req, res) => {
   const { email, password, tenantId } = req.body;
   if (!tenantId) return res.status(400).json({ error: "Tenant ID required" });
 
-  const isEmail = email.includes('@');
-  let user: any;
+  const loginValue = email.trim();
+  const loginValueLower = loginValue.toLowerCase();
 
-  if (isEmail) {
-    // Client login by email
-    user = db.prepare("SELECT * FROM users WHERE email = ? AND role = 'client' AND password = ? AND tenant_id = ?").get(email, password, tenantId);
-  } else {
-    // Admin/Manager login by name
-    user = db.prepare("SELECT * FROM users WHERE name = ? AND role IN ('admin', 'manager') AND password = ? AND tenant_id = ?").get(email, password, tenantId);
-  }
+  // Try to find user by email, name, or cpf
+  const user = db.prepare(`
+    SELECT * FROM users 
+    WHERE (LOWER(email) = ? OR name = ? OR cpf = ?) 
+    AND password = ? 
+    AND tenant_id = ?
+  `).get(loginValueLower, loginValue, loginValue, password, tenantId);
 
   if (!user) {
-    const errorMsg = isEmail 
-      ? "Credenciais de cliente inválidas ou e-mail não cadastrado como cliente nesta loja" 
-      : "Credenciais de organizador inválidas ou nome não cadastrado como admin/gerente nesta loja";
-    return res.status(401).json({ error: errorMsg });
+    return res.status(401).json({ error: "Credenciais inválidas ou usuário não cadastrado nesta loja" });
   }
   
   const token = jwt.sign({ 
@@ -624,7 +709,7 @@ app.post("/api/login", (req, res) => {
     user.tenant_id, user.id, "LOGIN", `Usuário realizou login como ${user.role}`
   );
   
-  res.json({ token, user: { id: user.id, name: user.name, role: user.role, tenant_id: user.tenant_id, signed_term_at: user.signed_term_at } });
+  res.json({ token, user: { id: user.id, name: user.name, role: user.role, tenant_id: user.tenant_id, signed_term_at: user.signed_term_at, cpf: user.cpf } });
 });
 
 app.post("/api/recover-password", (req, res) => {
@@ -833,15 +918,17 @@ app.delete("/api/products/:id", authenticate, (req: any, res) => {
 });
 
 app.post("/api/register", (req, res) => {
-  const { name, email, password, role, cpf, phone, address, pix_key, tenantId } = req.body;
+  const { name, email, password, role, cpf, phone, address, address_number, address_complement, address_cep, pix_key, tenantId } = req.body;
   
-  if (!name || !email || !password || !cpf || !phone || !address || !pix_key || !tenantId) {
+  if (!name || !email || !password || !cpf || !phone || !address || !address_number || !address_cep || !pix_key || !tenantId) {
     return res.status(400).json({ error: "Todos os campos são obrigatórios." });
   }
 
+  const emailLower = email.toLowerCase();
+
   try {
-    const info = db.prepare("INSERT INTO users (tenant_id, name, email, password, role, cpf, phone, address, pix_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-      tenantId, name, email, password, role || 'client', cpf, phone, address, pix_key
+    const info = db.prepare("INSERT INTO users (tenant_id, name, email, password, role, cpf, phone, address, address_number, address_complement, address_cep, pix_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+      tenantId, name, emailLower, password, role || 'client', cpf, phone, address, address_number, address_complement, address_cep, pix_key
     );
     
     db.prepare("INSERT INTO audit_logs (tenant_id, user_id, action, details) VALUES (?, ?, ?, ?)").run(
@@ -855,12 +942,14 @@ app.post("/api/register", (req, res) => {
 });
 
 app.post("/api/register-manager", (req, res) => {
-  const { name, email, password, tenantId } = req.body;
+  const { name, email, password, cpf, phone, address, address_number, address_complement, address_cep, pix_key, tenantId } = req.body;
   if (!tenantId) return res.status(400).json({ error: "Tenant ID required" });
 
+  const emailLower = email.toLowerCase();
+
   try {
-    const info = db.prepare("INSERT INTO users (tenant_id, name, email, password, role) VALUES (?, ?, ?, ?, 'manager')").run(
-      tenantId, name, email, password
+    const info = db.prepare("INSERT INTO users (tenant_id, name, email, password, role, cpf, phone, address, address_number, address_complement, address_cep, pix_key) VALUES (?, ?, ?, ?, 'manager', ?, ?, ?, ?, ?, ?, ?)").run(
+      tenantId, name, emailLower, password, cpf, phone, address, address_number, address_complement, address_cep, pix_key
     );
     res.json({ id: info.lastInsertRowid });
   } catch (e: any) {
@@ -869,15 +958,17 @@ app.post("/api/register-manager", (req, res) => {
 });
 
 app.post("/api/register-client", (req, res) => {
-  const { name, email, password, cpf, phone, address, pix_key, tenantId } = req.body;
+  const { name, email, password, cpf, phone, address, address_number, address_complement, address_cep, pix_key, tenantId } = req.body;
   if (!tenantId) return res.status(400).json({ error: "Tenant ID required" });
+
+  const emailLower = email.toLowerCase();
 
   try {
     const info = db.prepare(`
-      INSERT INTO users (tenant_id, name, email, password, role, cpf, phone, address, pix_key) 
-      VALUES (?, ?, ?, ?, 'client', ?, ?, ?, ?)
+      INSERT INTO users (tenant_id, name, email, password, role, cpf, phone, address, address_number, address_complement, address_cep, pix_key) 
+      VALUES (?, ?, ?, ?, 'client', ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      tenantId, name, email, password, cpf, phone, address, pix_key
+      tenantId, name, emailLower, password, cpf, phone, address, address_number, address_complement, address_cep, pix_key
     );
     res.json({ id: info.lastInsertRowid });
   } catch (e: any) {
