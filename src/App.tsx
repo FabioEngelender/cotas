@@ -3575,12 +3575,58 @@ function MyQuotas() {
 
 function MyPayments() {
   const [installments, setInstallments] = useState<any[]>([]);
+  const { user } = React.useContext(AuthContext)!;
 
   useEffect(() => {
     apiFetch('/api/my-installments')
     .then(res => res.json())
     .then(setInstallments);
   }, []);
+
+  const downloadPaymentReceipt = (inst: any) => {
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 14;
+    let cursorY = 20;
+
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("COMPROVANTE DE PAGAMENTO", pageWidth / 2, cursorY, { align: 'center' });
+    cursorY += 10;
+
+    doc.setFontSize(12);
+    doc.setTextColor(255, 0, 0);
+    doc.text("SEM VALOR FISCAL", pageWidth / 2, cursorY, { align: 'center' });
+    doc.setTextColor(0, 0, 0);
+    cursorY += 20;
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Participante: ${user?.name}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
+    cursorY += 15;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("DETALHES DO PAGAMENTO", margin, cursorY);
+    cursorY += 10;
+    doc.setFont("helvetica", "normal");
+    doc.text(`Produto: ${inst.productName}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Cotas: ${inst.quotaNumbers}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Valor: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Data de Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Data de Pagamento: ${new Date(inst.paid_at).toLocaleDateString('pt-BR')}`, margin, cursorY);
+    cursorY += 20;
+
+    doc.setFontSize(10);
+    doc.text(`Autenticação: ${user?.id}-${inst.id}-${Date.now()}`, margin, cursorY);
+    
+    doc.save(`comprovante_${inst.id}.pdf`);
+  };
 
   const totalPaid = installments.filter(i => i.status === 'paid').reduce((sum, i) => sum + i.amount, 0);
   const totalPending = installments.filter(i => i.status === 'pending').reduce((sum, i) => sum + i.amount, 0);
@@ -3634,7 +3680,15 @@ function MyPayments() {
                     {inst.status === 'paid' ? 'Pago' : 'Pendente'}
                   </span>
                   {inst.paid_at && (
-                    <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
+                    <>
+                      <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
+                      <button 
+                        onClick={() => downloadPaymentReceipt(inst)}
+                        className="mt-3 flex items-center gap-1 text-[9px] font-bold hover:underline text-left"
+                      >
+                        Emitir comprovante de pagamento <span className="text-red-500 uppercase">SEM VALOR FISCAL</span>
+                      </button>
+                    </>
                   )}
                 </td>
               </tr>
