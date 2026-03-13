@@ -1,12 +1,12 @@
 {
   "name": "react-example",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && tsc",
-    "start": "node dist/server.js",
-    "lint": "tsc --noEmit"
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",

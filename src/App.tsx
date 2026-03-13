@@ -31,7 +31,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { io } from 'socket.io-client';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
-import { User, Product, Quota, ChatMessage, Role } from './types';
+import { User, Product, Quota, ChatMessage, Role } from './types.js';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -1669,8 +1669,8 @@ function Dashboard() {
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
 
   const exportToCSV = (productName: string, sales: any[]) => {
-    const headers = ["Cota #", "Comprador", "Parcelas Pagas", "Total Parcelas"];
-    const rows = sales.map(s => [s.number || s.id, s.owner, s.paid_installments, s.total_installments]);
+    const headers = ["Cota #", "Comprador", "CPF", "Parcelas Pagas", "Total Parcelas"];
+    const rows = sales.map(s => [s.number || s.id, s.owner, s.owner_cpf || 'Não informado', s.paid_installments, s.total_installments]);
     const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(";")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -1729,6 +1729,7 @@ function Dashboard() {
                 <tr className="border-b border-black/5">
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Cota #</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Proprietário</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">CPF</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Parcelas Pagas</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Progresso</th>
                 </tr>
@@ -1738,6 +1739,7 @@ function Dashboard() {
                   <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.02] transition-all">
                     <td className="py-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
                     <td className="py-4 font-medium">{sale.owner}</td>
+                    <td className="py-4 text-sm text-black/60">{sale.owner_cpf || 'Não informado'}</td>
                     <td className="py-4 font-medium">{sale.paid_installments} / {sale.total_installments}</td>
                     <td className="py-4">
                       <div className="w-24 h-2 bg-black/5 rounded-full overflow-hidden">
@@ -3604,7 +3606,7 @@ function MyPayments() {
     doc.setFont("helvetica", "normal");
     doc.text(`Participante: ${user?.name}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
+    doc.text(`CPF: ${inst.owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
     cursorY += 15;
 
     doc.setFont("helvetica", "bold");
@@ -3620,7 +3622,12 @@ function MyPayments() {
     doc.text(`Data de Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
     cursorY += 7;
     doc.text(`Data de Pagamento: ${new Date(inst.paid_at).toLocaleDateString('pt-BR')}`, margin, cursorY);
-    cursorY += 20;
+    cursorY += 7;
+    if (inst.processed_by_name) {
+      doc.text(`Baixa realizada por: ${inst.processed_by_name} (${inst.processed_by_role})`, margin, cursorY);
+      cursorY += 7;
+    }
+    cursorY += 13;
 
     doc.setFontSize(10);
     doc.text(`Autenticação: ${user?.id}-${inst.id}-${Date.now()}`, margin, cursorY);

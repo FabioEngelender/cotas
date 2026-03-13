@@ -1,14 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "CommonJS",
-    "rootDir": "./",
-    "outDir": "./dist",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "outDir": "dist",
     "esModuleInterop": true,
     "strict": false,
     "skipLibCheck": true,
-    "jsx": "react-jsx",
-    "moduleResolution": "node"
+    "jsx": "react-jsx"
   },
-  "exclude": ["vite.config.ts"]
+  "include": ["src", "server.ts"],
+  "exclude": ["node_modules"]
 }

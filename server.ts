@@ -8,9 +8,6 @@ import Database from "better-sqlite3";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 
-// In CommonJS, __dirname is available.
-const __dirname_final = __dirname;
-
 dotenv.config();
 
 const db = new Database("database.db");
@@ -83,8 +80,10 @@ db.exec(`
     due_date DATE NOT NULL,
     status TEXT CHECK(status IN ('pending', 'paid')) DEFAULT 'pending',
     paid_at DATETIME,
+    processed_by_id INTEGER,
     FOREIGN KEY(tenant_id) REFERENCES tenants(id),
-    FOREIGN KEY(quota_id) REFERENCES quotas(id)
+    FOREIGN KEY(quota_id) REFERENCES quotas(id),
+    FOREIGN KEY(processed_by_id) REFERENCES users(id)
   );
 
   CREATE TABLE IF NOT EXISTS chat_messages (
@@ -241,7 +240,10 @@ try {
   db.prepare("ALTER TABLE quotas ADD COLUMN custom_name TEXT").run();
 } catch (e) {}
 
-// Migration: Add phone and address to users if they don't exist
+// Migration: Add processed_by_id to installments if it doesn't exist
+try {
+  db.prepare("ALTER TABLE installments ADD COLUMN processed_by_id INTEGER").run();
+} catch (e) {}
 try {
   db.prepare("ALTER TABLE users ADD COLUMN phone TEXT").run();
 } catch (e) {}
@@ -508,7 +510,7 @@ app.get("/api/stats", authenticate, (req: any, res) => {
       `).all(req.tenantId, req.tenantId).map((p: any) => {
         // Fetch sales details separately to avoid complex subquery issues in some SQLite versions
         const sales = db.prepare(`
-          SELECT q.id, q.number, u.name as owner
+          SELECT q.id, q.number, u.name as owner, u.cpf as owner_cpf
           FROM quotas q
           JOIN users u ON q.owner_id = u.id
           WHERE q.product_id = ? AND q.status = 'sold' AND q.tenant_id = ?
@@ -740,17 +742,22 @@ app.get("/api/my-quotas", authenticate, (req: any, res) => {
 app.get("/api/my-installments", authenticate, (req: any, res) => {
   const installments = db.prepare(`
     SELECT 
+      i.id,
       i.due_date,
-      SUM(i.amount) as amount,
-      GROUP_CONCAT(q.number) as quotaNumbers,
+      i.amount,
+      q.number as quotaNumbers,
       p.name as productName,
-      MAX(i.status) as status, -- If any is pending, show pending (simplified)
-      MAX(i.paid_at) as paid_at
+      i.status,
+      i.paid_at,
+      u_proc.name as processed_by_name,
+      u_proc.role as processed_by_role,
+      u_owner.cpf as owner_cpf
     FROM installments i
     JOIN quotas q ON i.quota_id = q.id
     JOIN products p ON q.product_id = p.id
+    JOIN users u_owner ON q.owner_id = u_owner.id
+    LEFT JOIN users u_proc ON i.processed_by_id = u_proc.id
     WHERE q.owner_id = ? AND i.tenant_id = ?
-    GROUP BY p.id, i.due_date
     ORDER BY i.due_date ASC
   `).all(req.user.id, req.tenantId);
   res.json(installments);
@@ -799,12 +806,12 @@ app.post("/api/installments/:id/pay", authenticate, (req: any, res) => {
   // Update all pending installments for this user, product and date
   const info = db.prepare(`
     UPDATE installments 
-    SET status = 'paid', paid_at = ? 
+    SET status = 'paid', paid_at = ?, processed_by_id = ? 
     WHERE status = 'pending' 
     AND due_date = ? 
     AND tenant_id = ?
     AND quota_id IN (SELECT id FROM quotas WHERE owner_id = ? AND tenant_id = ?)
-  `).run(now, target.due_date, req.tenantId, owner.owner_id, req.tenantId);
+  `).run(now, req.user.id, target.due_date, req.tenantId, owner.owner_id, req.tenantId);
   
   if (info.changes > 0) {
     const client = db.prepare("SELECT name FROM users WHERE id = ? AND tenant_id = ?").get(owner.owner_id, req.tenantId);
@@ -1301,6 +1308,10 @@ io.on("connection", (socket) => {
   });
 });
 
+const __dirname = new URL('.', import.meta.url).pathname;
+
+app.use(express.static(path.join(__dirname, "dist")));
+
 // Vite Middleware
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -1309,17 +1320,15 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = __dirname;
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
   }
 
-  const PORT = 3000;
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.get("*", (req, res) => {
+    res.sendFile(path.join(__dirname, "dist", "index.html"));
+  });
+
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
