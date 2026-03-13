@@ -1670,7 +1670,7 @@ function Dashboard() {
 
   const exportToCSV = (productName: string, sales: any[]) => {
     const headers = ["Cota #", "Comprador", "CPF", "Parcelas Pagas", "Total Parcelas"];
-    const rows = sales.map(s => [s.number || s.id, s.owner, s.owner_cpf || 'Não informado', s.paid_installments, s.total_installments]);
+    const rows = sales.map(s => [s.number || s.id, s.owner, s.cpf || 'Não informado', s.paid_installments, s.total_installments]);
     const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(";")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -1739,7 +1739,7 @@ function Dashboard() {
                   <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.02] transition-all">
                     <td className="py-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
                     <td className="py-4 font-medium">{sale.owner}</td>
-                    <td className="py-4 text-sm text-black/60">{sale.owner_cpf || 'Não informado'}</td>
+                    <td className="py-4 text-sm text-black/60">{sale.cpf || 'Não informado'}</td>
                     <td className="py-4 font-medium">{sale.paid_installments} / {sale.total_installments}</td>
                     <td className="py-4">
                       <div className="w-24 h-2 bg-black/5 rounded-full overflow-hidden">

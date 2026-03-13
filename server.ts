@@ -510,7 +510,7 @@ app.get("/api/stats", authenticate, (req: any, res) => {
       `).all(req.tenantId, req.tenantId).map((p: any) => {
         // Fetch sales details separately to avoid complex subquery issues in some SQLite versions
         const sales = db.prepare(`
-          SELECT q.id, q.number, u.name as owner, u.cpf as owner_cpf
+          SELECT q.id, q.number, u.name as owner, u.cpf
           FROM quotas q
           JOIN users u ON q.owner_id = u.id
           WHERE q.product_id = ? AND q.status = 'sold' AND q.tenant_id = ?
@@ -1322,7 +1322,7 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  app.get("*", (req, res) => {
+  app.get("/*", (req, res) => {
     res.sendFile(path.join(__dirname, "dist", "index.html"));
   });
 
