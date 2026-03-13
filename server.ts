@@ -1309,8 +1309,7 @@ io.on("connection", (socket) => {
 });
 
 const __dirname = new URL('.', import.meta.url).pathname;
-
-app.use(express.static(path.join(__dirname, "dist")));
+const clientPath = path.join(__dirname);
 
 // Vite Middleware
 async function startServer() {
@@ -1320,10 +1319,12 @@ async function startServer() {
       appType: "spa",
     });
     app.use(vite.middlewares);
+  } else {
+    app.use(express.static(clientPath));
   }
 
   app.get(/.*/, (req, res) => {
-    res.sendFile(path.join(__dirname, "dist", "index.html"));
+    res.sendFile(path.join(clientPath, "index.html"));
   });
 
   const PORT = process.env.PORT || 3000;
