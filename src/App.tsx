@@ -225,27 +225,64 @@ function InviteModal({ isOpen, onClose, tenantId, userRole }: { isOpen: boolean,
 
 function AuthenticatedApp({ settings }: { settings: any }) {
   const { user, tenantId, logout } = React.useContext(AuthContext)!;
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const location = useLocation();
+
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [location]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen overflow-hidden relative">
       <InviteModal 
         isOpen={showInviteModal} 
         onClose={() => setShowInviteModal(false)} 
         tenantId={tenantId!} 
         userRole={user.role}
       />
+      
+      {/* Mobile Header */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-white border-b border-black/5 flex items-center justify-between px-6 z-[60]">
+        <span className="font-bold text-lg tracking-tight">{settings.app_name}</span>
+        <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2 hover:bg-black/5 rounded-xl">
+          {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
+      </div>
+
+      {/* Sidebar Overlay */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="lg:hidden fixed inset-0 bg-black/40 backdrop-blur-sm z-[70]"
+          />
+        )}
+      </AnimatePresence>
+
       {/* Sidebar */}
       <motion.aside 
         initial={false}
-        animate={{ width: isSidebarOpen ? 280 : 80 }}
-        className="bg-white border-r border-[#141414]/10 flex flex-col z-50"
+        animate={{ 
+          width: isSidebarOpen ? 280 : 80,
+          x: window.innerWidth < 1024 ? (isMobileMenuOpen ? 0 : -280) : 0
+        }}
+        className={cn(
+          "bg-white border-r border-[#141414]/10 flex flex-col z-[80] transition-all duration-300",
+          "fixed lg:relative h-full"
+        )}
       >
         <div className="p-6 flex items-center justify-between border-b border-[#141414]/5">
-          {isSidebarOpen && <span className="font-bold text-xl tracking-tight">{settings.app_name}</span>}
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-1 hover:bg-black/5 rounded">
+          {(isSidebarOpen || window.innerWidth < 1024) && <span className="font-bold text-xl tracking-tight">{settings.app_name}</span>}
+          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="hidden lg:block p-1 hover:bg-black/5 rounded">
             {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
+          <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden p-1 hover:bg-black/5 rounded">
+            <X size={20} />
           </button>
         </div>
 
@@ -295,7 +332,9 @@ function AuthenticatedApp({ settings }: { settings: any }) {
             {isSidebarOpen && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold truncate">{user.name}</p>
-                <p className="text-[10px] uppercase tracking-wider opacity-50">{user.role}</p>
+                <p className="text-[10px] uppercase tracking-wider opacity-50">
+                  {user.role === 'admin' ? 'Admin' : user.role === 'manager' ? 'Gerente' : 'Cliente'}
+                </p>
               </div>
             )}
             {isSidebarOpen && (
@@ -308,8 +347,9 @@ function AuthenticatedApp({ settings }: { settings: any }) {
       </motion.aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto p-8">
-        <Routes>
+      <main className="flex-1 overflow-y-auto pt-16 lg:pt-0">
+        <div className="max-w-7xl mx-auto p-4 lg:p-10">
+          <Routes>
           <Route path="/" element={user.role === 'admin' ? <Navigate to="/dashboard" /> : <ProductsList />} />
           <Route path="/dashboard" element={user.role === 'admin' ? <Dashboard /> : <Navigate to="/products" />} />
           <Route path="/products" element={<ProductsList />} />
@@ -324,6 +364,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
           <Route path="/register" element={<Register />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Routes>
+        </div>
       </main>
     </div>
   );
@@ -1899,7 +1940,7 @@ function ProductsList() {
   }, []);
 
   const handleCreateProduct = async () => {
-    if (!newProduct.name || !newProduct.total_quotas || !newProduct.quota_price) {
+    if (!newProduct.name || !newProduct.total_quotas || !newProduct.quota_price || !newProduct.expiration_month) {
       alert('Por favor, preencha todos os campos obrigatórios.');
       return;
     }
@@ -2928,7 +2969,6 @@ function ProductChat() {
           </Link>
           <h3 className="font-bold text-xl">Chat do Produto {product ? `(${product.name})` : `#${id}`}</h3>
         </div>
-        <span className="text-xs font-bold uppercase tracking-widest opacity-40">Apenas primeiro nome visível</span>
       </div>
 
       <div ref={scrollRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#F9F9F7]">
@@ -2994,7 +3034,10 @@ function ClientsList() {
   const downloadClientTerm = (client: User, products: any[]) => {
     if (!client.signed_term_at) return alert('Este cliente ainda não assinou o termo.');
     
-    const quotasStr = products.map((p: any) => `${p.quotaCount} cota(s) de ${p.name}`).join(', ');
+    const quotasStr = products.map((p: any) => {
+      const numbers = p.quotaNumbers ? p.quotaNumbers.split(',').map((n: string) => `#${n}`).join(', ') : '';
+      return `${p.quotaCount} cota(s) de ${p.name} (${numbers})`;
+    }).join(', ');
 
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -3100,6 +3143,14 @@ function ClientsList() {
     }
   };
 
+  const sortedClients = [...clients].sort((a, b) => {
+    const roleOrder: Record<string, number> = { admin: 1, manager: 2, client: 3 };
+    if (roleOrder[a.role] !== roleOrder[b.role]) {
+      return roleOrder[a.role] - roleOrder[b.role];
+    }
+    return a.name.localeCompare(b.name);
+  });
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -3133,7 +3184,7 @@ function ClientsList() {
             </tr>
           </thead>
           <tbody className="divide-y divide-black/5">
-            {clients.map(client => (
+            {sortedClients.map(client => (
               <tr key={client.id} className="hover:bg-black/5 transition-colors">
                 <td className="p-6 font-semibold">{client.name}</td>
                 <td className="p-6 text-black/50">{client.email}</td>
@@ -3149,7 +3200,9 @@ function ClientsList() {
                   )}
                 </td>
                 <td className="p-6">
-                  <span className="px-3 py-1 bg-black/5 text-black/50 rounded-full text-[10px] font-bold uppercase">{client.role}</span>
+                  <span className="px-3 py-1 bg-black/5 text-black/50 rounded-full text-[10px] font-bold uppercase">
+                    {client.role === 'admin' ? 'Admin' : client.role === 'manager' ? 'Gerente' : 'Cliente'}
+                  </span>
                 </td>
                 <td className="p-6 flex gap-2">
                   <button 
@@ -3398,15 +3451,62 @@ function TermsPage() {
       const res = await apiFetch('/api/my-quotas');
       const myQuotas = await res.json();
       
-      const quotasStr = myQuotas.map((q: any) => `Cota ${q.number} (${q.productName})`).join('\n');
+      const quotasStr = myQuotas.map((q: any) => `Cota ${q.number} (${q.productName})`).join(', ');
 
-      const element = document.createElement("a");
-      const footer = `\n\n----------------------------------\nCOTAS ADQUIRIDAS:\n${quotasStr || 'Nenhuma cota registrada.'}\n\nAssinado eletronicamente por ${user?.name} em ${new Date(user?.signed_term_at!).toLocaleString()}`;
-      const file = new Blob([content + footer], {type: 'text/plain'});
-      element.href = URL.createObjectURL(file);
-      element.download = "termo_adesao_assinado.txt";
-      document.body.appendChild(element);
-      element.click();
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 14;
+      let cursorY = 20;
+
+      doc.setFontSize(16);
+      doc.setFont("helvetica", "bold");
+      doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+      cursorY += 10;
+
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(50, 50, 50);
+      const splitTerm = doc.splitTextToSize(content, pageWidth - (margin * 2));
+      
+      for (let i = 0; i < splitTerm.length; i++) {
+        if (cursorY > pageHeight - 40) {
+          doc.addPage();
+          cursorY = 20;
+        }
+        doc.text(splitTerm[i], margin, cursorY);
+        cursorY += 5;
+      }
+
+      cursorY += 10;
+      if (cursorY > pageHeight - 60) {
+        doc.addPage();
+        cursorY = 20;
+      }
+
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, cursorY, pageWidth - margin, cursorY);
+      cursorY += 10;
+
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+      cursorY += 10;
+
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Participante: ${user?.name}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Data do Aceite: ${new Date(user?.signed_term_at!).toLocaleString('pt-BR')}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Produtos/Cotas: ${quotasStr || 'Nenhuma cota registrada no momento da assinatura.'}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Autenticação Digital ID: ${user?.id}-${new Date(user?.signed_term_at!).getTime()}`, margin, cursorY);
+      
+      doc.save(`termo_adesao_assinado.pdf`);
     } catch (err) {
       console.error(err);
       alert('Erro ao gerar cópia do termo.');

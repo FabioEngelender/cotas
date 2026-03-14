@@ -991,7 +991,7 @@ app.get("/api/users/:id/details", authenticate, (req: any, res) => {
   if (!user) return res.status(404).json({ error: "Usuário não encontrado" });
   
   const products = db.prepare(`
-    SELECT p.name, COUNT(q.id) as quotaCount, SUM(q.price) as totalValue,
+    SELECT p.name, COUNT(q.id) as quotaCount, GROUP_CONCAT(q.number) as quotaNumbers, SUM(q.price) as totalValue,
     (SELECT SUM(i.amount) FROM installments i WHERE i.quota_id IN (SELECT id FROM quotas WHERE product_id = p.id AND owner_id = ? AND tenant_id = ?) AND i.tenant_id = ?) as totalInstallments,
     (SELECT SUM(i.amount) FROM installments i WHERE i.quota_id IN (SELECT id FROM quotas WHERE product_id = p.id AND owner_id = ? AND tenant_id = ?) AND i.status = 'pending' AND i.tenant_id = ?) as pendingValue
     FROM products p
