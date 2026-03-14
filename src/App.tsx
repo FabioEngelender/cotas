@@ -228,11 +228,21 @@ function AuthenticatedApp({ settings }: { settings: any }) {
   const [isSidebarOpen, setIsSidebarOpen] = useState(window.innerWidth > 1024);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const location = useLocation();
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [location]);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const isMobile = windowWidth < 1024;
+  const showLabels = isSidebarOpen || isMobile;
 
   return (
     <div className="flex h-screen overflow-hidden relative">
@@ -268,8 +278,8 @@ function AuthenticatedApp({ settings }: { settings: any }) {
       <motion.aside 
         initial={false}
         animate={{ 
-          width: isSidebarOpen ? 280 : 80,
-          x: window.innerWidth < 1024 ? (isMobileMenuOpen ? 0 : -280) : 0
+          width: showLabels ? 280 : 80,
+          x: isMobile ? (isMobileMenuOpen ? 0 : -280) : 0
         }}
         className={cn(
           "bg-white border-r border-[#141414]/10 flex flex-col z-[80] transition-all duration-300",
@@ -277,7 +287,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
         )}
       >
         <div className="p-6 flex items-center justify-between border-b border-[#141414]/5">
-          {(isSidebarOpen || window.innerWidth < 1024) && <span className="font-bold text-xl tracking-tight">{settings.app_name}</span>}
+          {showLabels && <span className="font-bold text-xl tracking-tight">{settings.app_name}</span>}
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="hidden lg:block p-1 hover:bg-black/5 rounded">
             {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -288,48 +298,48 @@ function AuthenticatedApp({ settings }: { settings: any }) {
 
         <nav className="flex-1 p-4 space-y-2">
           {user.role === 'admin' && (
-            <SidebarLink to="/dashboard" icon={<LayoutDashboard size={20} />} label="Painel" isOpen={isSidebarOpen} />
+            <SidebarLink to="/dashboard" icon={<LayoutDashboard size={20} />} label="Painel" isOpen={showLabels} />
           )}
-          <SidebarLink to="/products" icon={<Package size={20} />} label="Produtos" isOpen={isSidebarOpen} />
+          <SidebarLink to="/products" icon={<Package size={20} />} label="Produtos" isOpen={showLabels} />
           {user.role === 'client' && (
             <>
-              <SidebarLink to="/my-quotas" icon={<Package size={20} />} label="Minhas Cotas" isOpen={isSidebarOpen} />
-              <SidebarLink to="/my-payments" icon={<CreditCard size={20} />} label="Meus Pagamentos" isOpen={isSidebarOpen} />
+              <SidebarLink to="/my-quotas" icon={<Package size={20} />} label="Minhas Cotas" isOpen={showLabels} />
+              <SidebarLink to="/my-payments" icon={<CreditCard size={20} />} label="Meus Pagamentos" isOpen={showLabels} />
             </>
           )}
           {user.role !== 'client' && (
             <>
-              <SidebarLink to="/clients" icon={<Users size={20} />} label="Clientes" isOpen={isSidebarOpen} />
-              <SidebarLink to="/payments" icon={<CreditCard size={20} />} label="Pagamentos" isOpen={isSidebarOpen} />
+              <SidebarLink to="/clients" icon={<Users size={20} />} label="Clientes" isOpen={showLabels} />
+              <SidebarLink to="/payments" icon={<CreditCard size={20} />} label="Pagamentos" isOpen={showLabels} />
             </>
           )}
           {user.role !== 'manager' && (
-            <SidebarLink to="/terms" icon={<FileText size={20} />} label="Termo" isOpen={isSidebarOpen} />
+            <SidebarLink to="/terms" icon={<FileText size={20} />} label="Termo" isOpen={showLabels} />
           )}
           {user.role !== 'client' && (
-            <SidebarLink to="/audit" icon={<Shield size={20} />} label="Auditoria" isOpen={isSidebarOpen} />
+            <SidebarLink to="/audit" icon={<Shield size={20} />} label="Auditoria" isOpen={showLabels} />
           )}
           {user.role === 'admin' && (
-            <SidebarLink to="/settings" icon={<SettingsIcon size={20} />} label="Configurações" isOpen={isSidebarOpen} />
+            <SidebarLink to="/settings" icon={<SettingsIcon size={20} />} label="Configurações" isOpen={showLabels} />
           )}
           <button 
             onClick={() => setShowInviteModal(true)}
             className={cn(
               "flex items-center gap-4 p-3 rounded-xl hover:bg-black/5 transition-all group w-full text-left",
-              !isSidebarOpen && "justify-center"
+              !showLabels && "justify-center"
             )}
           >
             <div className="text-indigo-600"><UserPlus size={20} /></div>
-            {isSidebarOpen && <span className="font-medium">Convidar</span>}
+            {showLabels && <span className="font-medium">Convidar</span>}
           </button>
         </nav>
 
         <div className="p-4 border-t border-[#141414]/5">
-          <div className={cn("flex items-center gap-3 p-3 rounded-xl bg-black/5", !isSidebarOpen && "justify-center")}>
+          <div className={cn("flex items-center gap-3 p-3 rounded-xl bg-black/5", !showLabels && "justify-center")}>
             <div className="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-white text-xs font-bold">
               {user.name[0]}
             </div>
-            {isSidebarOpen && (
+            {showLabels && (
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold truncate">{user.name}</p>
                 <p className="text-[10px] uppercase tracking-wider opacity-50">
@@ -337,7 +347,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
                 </p>
               </div>
             )}
-            {isSidebarOpen && (
+            {showLabels && (
               <button onClick={logout} className="p-1 hover:text-red-500 transition-colors">
                 <LogOut size={16} />
               </button>
