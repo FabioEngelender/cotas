@@ -2391,8 +2391,13 @@ function ProductDetail() {
     doc.setFont("helvetica", "normal");
     doc.text(`Produto: ${product?.name}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`Cotas: ${quotasStr}`, margin, cursorY);
-    cursorY += 7;
+    
+    const quotaLabel = "Cotas: ";
+    const splitQuotas = doc.splitTextToSize(quotasStr, pageWidth - (margin * 2) - 15);
+    doc.text(quotaLabel, margin, cursorY);
+    doc.text(splitQuotas, margin + 15, cursorY);
+    cursorY += (splitQuotas.length * 5) + 2;
+
     doc.text(`Valor Total: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
     cursorY += 7;
     doc.text(`Parcelamento: ${installmentCount}x de ${(totalValue / installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
@@ -3088,8 +3093,20 @@ function ClientsList() {
     cursorY += 7;
     doc.text(`Data do Aceite: ${new Date(client.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`Produtos/Cotas: ${quotasStr || 'Nenhuma cota registrada no momento da assinatura.'}`, margin, cursorY);
-    cursorY += 7;
+    
+    const productLabel = "Produtos/Cotas: ";
+    const productValue = quotasStr || 'Nenhuma cota registrada no momento da assinatura.';
+    const splitProducts = doc.splitTextToSize(productValue, pageWidth - (margin * 2) - 35); // 35 is approx width of label
+    
+    doc.text(productLabel, margin, cursorY);
+    doc.text(splitProducts, margin + 35, cursorY);
+    cursorY += (splitProducts.length * 5) + 2;
+    
+    if (cursorY > pageHeight - 20) {
+      doc.addPage();
+      cursorY = 20;
+    }
+    
     doc.text(`Autenticação Digital ID: ${client.id}-${new Date(client.signed_term_at).getTime()}`, margin, cursorY);
     
     doc.save(`termo_assinado_${client.name.replace(/\s+/g, '_').toLowerCase()}.pdf`);
@@ -3502,8 +3519,20 @@ function TermsPage() {
       cursorY += 7;
       doc.text(`Data do Aceite: ${new Date(user?.signed_term_at!).toLocaleString('pt-BR')}`, margin, cursorY);
       cursorY += 7;
-      doc.text(`Produtos/Cotas: ${quotasStr || 'Nenhuma cota registrada no momento da assinatura.'}`, margin, cursorY);
-      cursorY += 7;
+      
+      const productLabel = "Produtos/Cotas: ";
+      const productValue = quotasStr || 'Nenhuma cota registrada no momento da assinatura.';
+      const splitProducts = doc.splitTextToSize(productValue, pageWidth - (margin * 2) - 35);
+      
+      doc.text(productLabel, margin, cursorY);
+      doc.text(splitProducts, margin + 35, cursorY);
+      cursorY += (splitProducts.length * 5) + 2;
+
+      if (cursorY > pageHeight - 20) {
+        doc.addPage();
+        cursorY = 20;
+      }
+
       doc.text(`Autenticação Digital ID: ${user?.id}-${new Date(user?.signed_term_at!).getTime()}`, margin, cursorY);
       
       doc.save(`termo_adesao_assinado.pdf`);
@@ -3715,8 +3744,13 @@ function MyPayments() {
     doc.setFont("helvetica", "normal");
     doc.text(`Produto: ${inst.productName}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`Cotas: ${inst.quotaNumbers}`, margin, cursorY);
-    cursorY += 7;
+    
+    const quotaLabel = "Cotas: ";
+    const splitQuotas = doc.splitTextToSize(String(inst.quotaNumbers), pageWidth - (margin * 2) - 15);
+    doc.text(quotaLabel, margin, cursorY);
+    doc.text(splitQuotas, margin + 15, cursorY);
+    cursorY += (splitQuotas.length * 5) + 2;
+
     doc.text(`Valor: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
     cursorY += 7;
     doc.text(`Data de Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
