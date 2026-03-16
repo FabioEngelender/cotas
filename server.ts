@@ -1012,10 +1012,18 @@ app.get("/api/users", authenticate, (req: any, res) => {
   if (req.user.role === 'client') return res.status(403).json({ error: "Forbidden" });
   
   let users;
+  const overdueSubquery = `
+    (SELECT COUNT(*) FROM installments i 
+     JOIN quotas q ON i.quota_id = q.id 
+     WHERE q.owner_id = users.id 
+     AND i.status = 'pending' 
+     AND i.due_date < date('now')) > 0 as has_overdue_payments
+  `;
+
   if (req.user.role === 'manager') {
-    users = db.prepare("SELECT id, name, email, role, cpf, signed_term_at FROM users WHERE name != 'Cotamaster' AND tenant_id = ?").all(req.tenantId);
+    users = db.prepare(`SELECT id, name, email, role, cpf, signed_term_at, ${overdueSubquery} FROM users WHERE name != 'Cotamaster' AND tenant_id = ?`).all(req.tenantId);
   } else {
-    users = db.prepare("SELECT id, name, email, role, cpf, signed_term_at FROM users WHERE tenant_id = ?").all(req.tenantId);
+    users = db.prepare(`SELECT id, name, email, role, cpf, signed_term_at, ${overdueSubquery} FROM users WHERE tenant_id = ?`).all(req.tenantId);
   }
   res.json(users);
 });
@@ -1116,7 +1124,7 @@ app.post("/api/quotas/buy", authenticate, (req: any, res) => {
     let dueDay = 10; // Default due day
     
     if (quota.expiration_month) {
-      const expDate = new Date(quota.expiration_month);
+      const expDate = new Date(quota.expiration_month + 'T12:00:00');
       const now = new Date();
       const diffMonths = (expDate.getFullYear() - now.getFullYear()) * 12 + (expDate.getMonth() - now.getMonth());
       productMaxInst = Math.max(1, diffMonths + 1);
@@ -1131,8 +1139,18 @@ app.post("/api/quotas/buy", authenticate, (req: any, res) => {
 
     // Create installments
     const installmentAmount = quota.price / instCount;
+    const firstDueDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    
     for (let i = 0; i < instCount; i++) {
-      const dueDate = new Date(now.getFullYear(), now.getMonth() + i, dueDay);
+      let dueDate;
+      if (i === 0) {
+        dueDate = firstDueDate;
+      } else {
+        dueDate = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i, dueDay);
+        if (i === 1 && dueDate <= firstDueDate) {
+          dueDate = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i + 1, dueDay);
+        }
+      }
       
       db.prepare("INSERT INTO installments (tenant_id, quota_id, amount, due_date, status) VALUES (?, ?, ?, ?, ?)").run(
         tId, id, installmentAmount, dueDate.toISOString().split('T')[0], 'pending'

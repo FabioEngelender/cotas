@@ -429,7 +429,6 @@ function TenantSelection() {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(`Loja criada com sucesso!\n\nAdmin: ${data.adminEmail}\nSenha: ${data.adminPassword}\n\nGuarde estas credenciais!`);
         fetchTenants();
         setShowCreate(false);
       } else {
@@ -953,7 +952,6 @@ function RegisterTenant() {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(`Loja criada com sucesso!\n\nAdmin: ${data.adminEmail}\nSenha: ${data.adminPassword}\n\nGuarde estas credenciais!`);
         navigate('/');
       } else {
         setError(data.error);
@@ -1873,9 +1871,12 @@ function Dashboard() {
                       <FileSpreadsheet size={16} />
                     </button>
                   </div>
-                  <div className="flex items-center gap-2 text-xs font-bold text-black/40 group-hover:text-black transition-all">
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setSelectedProduct(pr); }}
+                    className="flex items-center gap-2 text-xs font-bold text-black/40 group-hover:text-black transition-all"
+                  >
                     Ver Compradores <ChevronRight size={14} />
-                  </div>
+                  </button>
                 </div>
               </div>
             ))}
@@ -2799,7 +2800,25 @@ function ProductDetail() {
                             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
                               {Array.from({ length: installmentCount }, (_, i) => {
                                 const today = new Date();
-                                const d = new Date(today.getFullYear(), today.getMonth() + i, 20);
+                                const creationDate = product?.created_at ? new Date(product.created_at) : today;
+                                const firstDueDate = new Date(creationDate.getTime() + 24 * 60 * 60 * 1000);
+                                
+                                const expDate = product?.expiration_month ? new Date(product.expiration_month + 'T12:00:00') : null;
+                                const dueDay = expDate ? expDate.getDate() : 20;
+                                
+                                let d;
+                                if (i === 0) {
+                                  d = firstDueDate;
+                                } else {
+                                  // Subsequent installments on the dueDay of following months
+                                  d = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i, dueDay);
+                                  // If the calculated date is before or too close to the previous one, push it
+                                  const prevD = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i - 1, dueDay);
+                                  if (i === 1 && d <= firstDueDate) {
+                                    d = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i + 1, dueDay);
+                                  }
+                                }
+                                
                                 return (
                                   <div key={i} className="flex justify-between text-[10px]">
                                     <span className="opacity-60">{i + 1}ª Parcela</span>
@@ -3171,6 +3190,10 @@ function ClientsList() {
   };
 
   const sortedClients = [...clients].sort((a, b) => {
+    // Prioritize overdue payments
+    if (a.has_overdue_payments !== b.has_overdue_payments) {
+      return a.has_overdue_payments ? -1 : 1;
+    }
     const roleOrder: Record<string, number> = { admin: 1, manager: 2, client: 3 };
     if (roleOrder[a.role] !== roleOrder[b.role]) {
       return roleOrder[a.role] - roleOrder[b.role];
@@ -3206,6 +3229,7 @@ function ClientsList() {
               <th className="p-6">Nome</th>
               <th className="p-6">E-mail</th>
               <th className="p-6">Status Termo</th>
+              <th className="p-6">Status Pagamento</th>
               <th className="p-6">Nível</th>
               <th className="p-6">Ações</th>
             </tr>
@@ -3222,6 +3246,24 @@ function ClientsList() {
                     ) : (
                       <span className="px-3 py-1 bg-red-500/10 text-red-600 rounded-full text-[10px] font-bold uppercase">Pendente</span>
                     )
+                  ) : (
+                    <span className="text-black/20">-</span>
+                  )}
+                </td>
+                <td className="p-6">
+                  {client.role === 'client' ? (
+                    <div className="flex items-center gap-2">
+                      <div className={cn(
+                        "w-3 h-3 rounded-full",
+                        client.has_overdue_payments ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+                      )} />
+                      <span className={cn(
+                        "text-[10px] font-bold uppercase tracking-widest",
+                        client.has_overdue_payments ? "text-red-600" : "text-emerald-600"
+                      )}>
+                        {client.has_overdue_payments ? 'Atrasado' : 'Em dia'}
+                      </span>
+                    </div>
                   ) : (
                     <span className="text-black/20">-</span>
                   )}
@@ -3724,7 +3766,7 @@ function MyPayments() {
     .then(setInstallments);
   }, []);
 
-  const downloadPaymentReceipt = (inst: any) => {
+  const downloadPaymentReceipt = (group: any) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     const margin = 14;
@@ -3732,7 +3774,7 @@ function MyPayments() {
 
     doc.setFontSize(16);
     doc.setFont("helvetica", "bold");
-    doc.text("COMPROVANTE DE PAGAMENTO", pageWidth / 2, cursorY, { align: 'center' });
+    doc.text("COMPROVANTE DE PAGAMENTO CONSOLIDADO", pageWidth / 2, cursorY, { align: 'center' });
     cursorY += 10;
 
     doc.setFontSize(12);
@@ -3745,39 +3787,60 @@ function MyPayments() {
     doc.setFont("helvetica", "normal");
     doc.text(`Participante: ${user?.name}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`CPF: ${inst.owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
+    doc.text(`CPF: ${group.items[0].owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
     cursorY += 15;
 
     doc.setFont("helvetica", "bold");
-    doc.text("DETALHES DO PAGAMENTO", margin, cursorY);
+    doc.text("DETALHES DOS PAGAMENTOS", margin, cursorY);
+    cursorY += 10;
+    
+    group.items.forEach((inst: any, idx: number) => {
+      if (cursorY > 250) {
+        doc.addPage();
+        cursorY = 20;
+      }
+      
+      doc.setFont("helvetica", "bold");
+      doc.text(`${idx + 1}. Produto: ${inst.productName}`, margin, cursorY);
+      cursorY += 7;
+      doc.setFont("helvetica", "normal");
+      
+      const quotaLabel = "Cotas: ";
+      const splitQuotas = doc.splitTextToSize(String(inst.quotaNumbers), pageWidth - (margin * 2) - 15);
+      doc.text(quotaLabel, margin, cursorY);
+      doc.text(splitQuotas, margin + 15, cursorY);
+      cursorY += (splitQuotas.length * 5) + 2;
+
+      doc.text(`Valor: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
+      cursorY += 10;
+    });
+
+    doc.setFont("helvetica", "bold");
+    doc.text(`VALOR TOTAL PAGO: ${group.totalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
     cursorY += 10;
     doc.setFont("helvetica", "normal");
-    doc.text(`Produto: ${inst.productName}`, margin, cursorY);
-    cursorY += 7;
-    
-    const quotaLabel = "Cotas: ";
-    const splitQuotas = doc.splitTextToSize(String(inst.quotaNumbers), pageWidth - (margin * 2) - 15);
-    doc.text(quotaLabel, margin, cursorY);
-    doc.text(splitQuotas, margin + 15, cursorY);
-    cursorY += (splitQuotas.length * 5) + 2;
-
-    doc.text(`Valor: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
-    cursorY += 7;
-    doc.text(`Data de Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
-    cursorY += 7;
-    doc.text(`Data de Pagamento: ${new Date(inst.paid_at).toLocaleDateString('pt-BR')}`, margin, cursorY);
-    cursorY += 7;
-    if (inst.processed_by_name) {
-      doc.text(`Baixa realizada por: ${inst.processed_by_name} (${inst.processed_by_role})`, margin, cursorY);
-      cursorY += 7;
-    }
-    cursorY += 13;
+    doc.text(`Data de Pagamento: ${new Date(group.paidAt).toLocaleDateString('pt-BR')}`, margin, cursorY);
+    cursorY += 15;
 
     doc.setFontSize(10);
-    doc.text(`Autenticação: ${user?.id}-${inst.id}-${Date.now()}`, margin, cursorY);
+    doc.text(`Autenticação: ${user?.id}-${Date.now()}`, margin, cursorY);
     
-    doc.save(`comprovante_${inst.id}.pdf`);
+    doc.save(`comprovante_consolidado_${group.paidAt.split('T')[0]}.pdf`);
   };
+
+  const paidGroups = installments
+    .filter(i => i.status === 'paid' && i.paid_at)
+    .reduce((groups: any, inst) => {
+      const date = inst.paid_at.split('T')[0];
+      if (!groups[date]) {
+        groups[date] = { paidAt: inst.paid_at, totalAmount: 0, items: [] };
+      }
+      groups[date].totalAmount += inst.amount;
+      groups[date].items.push(inst);
+      return groups;
+    }, {});
 
   const totalPaid = installments.filter(i => i.status === 'paid').reduce((sum, i) => sum + i.amount, 0);
   const totalPending = installments.filter(i => i.status === 'pending').reduce((sum, i) => sum + i.amount, 0);
@@ -3799,6 +3862,30 @@ function MyPayments() {
           <p className="text-4xl font-bold text-amber-700">{totalPending.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
         </div>
       </div>
+
+      {Object.keys(paidGroups).length > 0 && (
+        <div className="space-y-4">
+          <h3 className="font-bold text-xl">Comprovantes por Data</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Object.values(paidGroups).map((group: any, idx: number) => (
+              <button 
+                key={idx}
+                onClick={() => downloadPaymentReceipt(group)}
+                className="flex items-center justify-between p-6 bg-white rounded-3xl border border-black/5 shadow-sm hover:border-black/20 transition-all group"
+              >
+                <div className="text-left">
+                  <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Pagamento em</p>
+                  <p className="font-bold">{new Date(group.paidAt).toLocaleDateString('pt-BR')}</p>
+                  <p className="text-xs text-emerald-600 font-medium mt-1">{group.items.length} parcelas quitadas</p>
+                </div>
+                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-2xl group-hover:scale-110 transition-all">
+                  <FileText size={20} />
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
         <table className="w-full text-left">
@@ -3831,15 +3918,7 @@ function MyPayments() {
                     {inst.status === 'paid' ? 'Pago' : 'Pendente'}
                   </span>
                   {inst.paid_at && (
-                    <>
-                      <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
-                      <button 
-                        onClick={() => downloadPaymentReceipt(inst)}
-                        className="mt-3 flex items-center gap-1 text-[9px] font-bold hover:underline text-left"
-                      >
-                        Emitir comprovante de pagamento <span className="text-red-500 uppercase">SEM VALOR FISCAL</span>
-                      </button>
-                    </>
+                    <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
                   )}
                 </td>
               </tr>

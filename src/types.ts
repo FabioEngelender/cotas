@@ -9,6 +9,7 @@ export interface User {
   cpf?: string;
   pix_key?: string;
   signed_term_at?: string;
+  has_overdue_payments?: boolean;
 }
 
 export interface Product {
