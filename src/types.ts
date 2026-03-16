@@ -1,8 +1,8 @@
 export type Role = 'admin' | 'manager' | 'client';
 
 export interface User {
-  id: number;
-  tenant_id: number;
+  id: string;
+  tenant_id: string;
   name: string;
   email: string;
   role: Role;
@@ -13,7 +13,7 @@ export interface User {
 }
 
 export interface Product {
-  id: number;
+  id: string;
   name: string;
   description: string;
   image_url?: string;
@@ -27,25 +27,26 @@ export interface Product {
 }
 
 export interface Quota {
-  id: number;
-  product_id: number;
+  id: string;
+  product_id: string;
   number: string;
-  owner_id?: number;
+  owner_id?: string;
   status: 'available' | 'sold' | 'grouped';
   price: number;
-  parent_quota_id?: number;
+  parent_quota_id?: string;
 }
 
 export interface ChatMessage {
+  id: string;
   userName: string;
   message: string;
-  createdAt: string;
-  mentionUserId?: number | null;
+  createdAt: any;
+  mentionUserId?: string | null;
 }
 
 export interface Installment {
-  id: number;
-  quota_id: number;
+  id: string;
+  quota_id: string;
   amount: number;
   due_date: string;
   status: 'pending' | 'paid';

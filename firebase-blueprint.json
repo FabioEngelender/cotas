@@ -1,0 +1,161 @@
+{
+  "entities": {
+    "Tenant": {
+      "title": "Tenant",
+      "description": "A business entity using the platform",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "cnpj": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "image_url": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user belonging to a tenant",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["admin", "manager", "client"] },
+        "cpf": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "pix_key": { "type": "string" },
+        "signed_term_at": { "type": "string", "format": "date-time" },
+        "signed_term_ip": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "role"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A lottery/pool product",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "image_url": { "type": "string" },
+        "total_quotas": { "type": "integer" },
+        "quota_price": { "type": "number" },
+        "payment_type": { "type": "string", "enum": ["cash", "installments"] },
+        "expiration_month": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "total_quotas", "quota_price"]
+    },
+    "Quota": {
+      "title": "Quota",
+      "description": "A fraction of a product",
+      "type": "object",
+      "properties": {
+        "number": { "type": "string" },
+        "owner_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["available", "sold", "grouped"] },
+        "parent_quota_id": { "type": "string" },
+        "fraction_index": { "type": "integer" },
+        "price": { "type": "number" },
+        "custom_name": { "type": "string" }
+      },
+      "required": ["status"]
+    },
+    "Installment": {
+      "title": "Installment",
+      "description": "A payment installment for a quota",
+      "type": "object",
+      "properties": {
+        "quota_id": { "type": "string" },
+        "amount": { "type": "number" },
+        "due_date": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["pending", "paid"] },
+        "paid_at": { "type": "string", "format": "date-time" },
+        "processed_by_id": { "type": "string" }
+      },
+      "required": ["quota_id", "amount", "due_date", "status"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A message in a product chat",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "message": { "type": "string" },
+        "mention_user_id": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "message"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "A log of administrative actions",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["action"]
+    },
+    "Term": {
+      "title": "Term",
+      "description": "Legal terms for a tenant",
+      "type": "object",
+      "properties": {
+        "content": { "type": "string" },
+        "is_active": { "type": "boolean" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["content"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Tenant-specific settings",
+      "type": "object",
+      "properties": {
+        "value": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Tenant document"
+    },
+    "/tenants/{tenantId}/users/{userId}": {
+      "schema": "User",
+      "description": "Users belonging to the tenant"
+    },
+    "/tenants/{tenantId}/products/{productId}": {
+      "schema": "Product",
+      "description": "Products offered by the tenant"
+    },
+    "/tenants/{tenantId}/products/{productId}/quotas/{quotaId}": {
+      "schema": "Quota",
+      "description": "Quotas for a specific product"
+    },
+    "/tenants/{tenantId}/products/{productId}/chat_messages/{messageId}": {
+      "schema": "ChatMessage",
+      "description": "Chat messages for a product"
+    },
+    "/tenants/{tenantId}/installments/{installmentId}": {
+      "schema": "Installment",
+      "description": "Payment installments"
+    },
+    "/tenants/{tenantId}/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit logs for the tenant"
+    },
+    "/tenants/{tenantId}/terms/{termId}": {
+      "schema": "Term",
+      "description": "Legal terms"
+    },
+    "/tenants/{tenantId}/settings/{settingKey}": {
+      "schema": "Setting",
+      "description": "Tenant settings"
+    }
+  }
+}
