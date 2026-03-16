@@ -28,22 +28,26 @@ service cloud.firestore {
     }
 
     function getUserData(tenantId) {
-      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data;
+      let path = /databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid);
+      return exists(path) ? get(path).data : null;
     }
 
     function isTenantAdmin(tenantId) {
+      let userData = getUserData(tenantId);
       return isAuthenticated() && (
-        getUserData(tenantId).role == 'admin' || 
+        (userData != null && userData.role == 'admin') || 
         (request.auth.token.email == "gamerengelender@gmail.com" && request.auth.token.email_verified == true)
       );
     }
 
     function isTenantManager(tenantId) {
-      return isAuthenticated() && getUserData(tenantId).role == 'manager';
+      let userData = getUserData(tenantId);
+      return isAuthenticated() && userData != null && userData.role == 'manager';
     }
 
     function isTenantStaff(tenantId) {
-      return isTenantAdmin(tenantId) || isTenantManager(tenantId);
+      let userData = getUserData(tenantId);
+      return isAuthenticated() && userData != null && (userData.role == 'admin' || userData.role == 'manager' || (request.auth.token.email == "gamerengelender@gmail.com" && request.auth.token.email_verified == true));
     }
 
     function isOwner(userId) {
@@ -61,12 +65,13 @@ service cloud.firestore {
     // Rules
     match /tenants/{tenantId} {
       allow read: if isAuthenticated();
-      allow write: if isTenantAdmin(tenantId);
+      allow create: if isAuthenticated(); // Allow any authenticated user to create a tenant
+      allow update, delete: if isTenantAdmin(tenantId);
 
       match /users/{userId} {
         allow read: if isAuthenticated() && (isOwner(userId) || isTenantStaff(tenantId));
         allow create: if isAuthenticated() && (
-          (isOwner(userId) && request.resource.data.role == 'client') || 
+          (isOwner(userId) && (request.resource.data.role == 'client' || request.resource.data.role == 'admin')) || 
           isTenantAdmin(tenantId)
         );
         allow update: if isAuthenticated() && (

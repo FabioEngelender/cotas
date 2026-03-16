@@ -876,6 +876,7 @@ function RegisterTenant() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const { setTenantId } = React.useContext(AuthContext)!;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -912,6 +913,7 @@ function RegisterTenant() {
         logo_url: formData.image_url
       });
 
+      setTenantId(tenantRef.id);
       alert('Loja criada com sucesso!');
       navigate('/');
     } catch (err: any) {
