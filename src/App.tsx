@@ -65,10 +65,55 @@ const maskCEP = (value: string) => {
     .replace(/(-\d{3})\d+?$/, '$1');
 };
 
-import { auth, db } from './firebase.js';
+import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch } from 'firebase/firestore';
 import { testConnection } from './firebaseService.js';
+
+// --- Error Boundary ---
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      let errorMessage = "Ocorreu um erro inesperado.";
+      try {
+        const parsed = JSON.parse(this.state.error.message);
+        if (parsed.error) errorMessage = `Erro de Permissão: ${parsed.error}`;
+      } catch (e) {
+        errorMessage = this.state.error.message || errorMessage;
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-6 bg-red-50">
+          <div className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-red-100">
+            <h2 className="text-2xl font-bold text-red-600 mb-4">Ops! Algo deu errado</h2>
+            <p className="text-gray-600 mb-6">{errorMessage}</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="w-full py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
+            >
+              Recarregar Página
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // --- Auth Context ---
 const AuthContext = React.createContext<{
@@ -140,24 +185,26 @@ export default function App() {
   if (!isAuthReady) return <div className="flex items-center justify-center h-screen">Carregando...</div>;
 
   return (
-    <AuthContext.Provider value={{ user, tenantId, setTenantId: handleSetTenantId, setUser, login, logout }}>
-      <Router>
-        <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans">
-          <Routes>
-            <Route path="/" element={!tenantId ? <TenantSelection /> : (user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />)} />
-            <Route path="/login" element={tenantId ? (!user ? <Login /> : <Navigate to="/" />) : <Navigate to="/" />} />
-            <Route path="/register" element={tenantId ? (!user ? <Register /> : <Navigate to="/" />) : <Navigate to="/" />} />
-            <Route path="/register-manager/:inviteTenantId" element={<RegisterManager />} />
-            <Route path="/register-tenant" element={<RegisterTenant />} />
-            <Route path="/register-client/:inviteTenantId" element={<RegisterClient />} />
-            <Route 
-              path="/*" 
-              element={user ? <AuthenticatedApp settings={settings} /> : <Navigate to="/" />} 
-            />
-          </Routes>
-        </div>
-      </Router>
-    </AuthContext.Provider>
+    <ErrorBoundary>
+      <AuthContext.Provider value={{ user, tenantId, setTenantId: handleSetTenantId, setUser, login, logout }}>
+        <Router>
+          <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans">
+            <Routes>
+              <Route path="/" element={!tenantId ? <TenantSelection /> : (user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />)} />
+              <Route path="/login" element={tenantId ? (!user ? <Login /> : <Navigate to="/" />) : <Navigate to="/" />} />
+              <Route path="/register" element={tenantId ? (!user ? <Register /> : <Navigate to="/" />) : <Navigate to="/" />} />
+              <Route path="/register-manager/:inviteTenantId" element={<RegisterManager />} />
+              <Route path="/register-tenant" element={<RegisterTenant />} />
+              <Route path="/register-client/:inviteTenantId" element={<RegisterClient />} />
+              <Route 
+                path="/*" 
+                element={user ? <AuthenticatedApp settings={settings} /> : <Navigate to="/" />} 
+              />
+            </Routes>
+          </div>
+        </Router>
+      </AuthContext.Provider>
+    </ErrorBoundary>
   );
 }
 
@@ -888,17 +935,24 @@ function RegisterTenant() {
       const result = await signInWithPopup(auth, provider);
       const firebaseUser = result.user;
 
+      const batch = writeBatch(db);
+      
+      // Generate tenant ID
+      const tenantRef = doc(collection(db, 'tenants'));
+      
       // Create tenant
-      const tenantRef = await addDoc(collection(db, 'tenants'), {
+      batch.set(tenantRef, {
         name: formData.name,
         cnpj: formData.cnpj,
         image_url: formData.image_url,
         status: 'active',
+        owner_id: firebaseUser.uid,
         created_at: serverTimestamp()
       });
 
       // Create admin user
-      await setDoc(doc(db, 'tenants', tenantRef.id, 'users', firebaseUser.uid), {
+      const userRef = doc(db, 'tenants', tenantRef.id, 'users', firebaseUser.uid);
+      batch.set(userRef, {
         name: formData.adminName,
         email: firebaseUser.email,
         role: 'admin',
@@ -907,11 +961,18 @@ function RegisterTenant() {
       });
 
       // Seed default settings
-      await setDoc(doc(db, 'tenants', tenantRef.id, 'settings', 'general'), {
+      const settingsRef = doc(db, 'tenants', tenantRef.id, 'settings', 'general');
+      batch.set(settingsRef, {
         app_name: formData.name,
         primary_color: '#141414',
         logo_url: formData.image_url
       });
+
+      try {
+        await batch.commit();
+      } catch (err: any) {
+        handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantRef.id}`);
+      }
 
       setTenantId(tenantRef.id);
       alert('Loja criada com sucesso!');

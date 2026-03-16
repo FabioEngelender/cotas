@@ -29,13 +29,16 @@ service cloud.firestore {
 
     function getUserData(tenantId) {
       let path = /databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid);
-      return exists(path) ? get(path).data : null;
+      return exists(path) ? get(path).data : (existsAfter(path) ? getAfter(path).data : null);
     }
 
     function isTenantAdmin(tenantId) {
       let userData = getUserData(tenantId);
+      let tenantData = exists(/databases/$(database)/documents/tenants/$(tenantId)) ? get(/databases/$(database)/documents/tenants/$(tenantId)).data : (existsAfter(/databases/$(database)/documents/tenants/$(tenantId)) ? getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data : null);
+      
       return isAuthenticated() && (
         (userData != null && userData.role == 'admin') || 
+        (tenantData != null && tenantData.owner_id == request.auth.uid) ||
         (request.auth.token.email == "gamerengelender@gmail.com" && request.auth.token.email_verified == true)
       );
     }
@@ -47,7 +50,13 @@ service cloud.firestore {
 
     function isTenantStaff(tenantId) {
       let userData = getUserData(tenantId);
-      return isAuthenticated() && userData != null && (userData.role == 'admin' || userData.role == 'manager' || (request.auth.token.email == "gamerengelender@gmail.com" && request.auth.token.email_verified == true));
+      let tenantData = exists(/databases/$(database)/documents/tenants/$(tenantId)) ? get(/databases/$(database)/documents/tenants/$(tenantId)).data : (existsAfter(/databases/$(database)/documents/tenants/$(tenantId)) ? getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data : null);
+
+      return isAuthenticated() && (
+        (userData != null && (userData.role == 'admin' || userData.role == 'manager')) || 
+        (tenantData != null && tenantData.owner_id == request.auth.uid) ||
+        (request.auth.token.email == "gamerengelender@gmail.com" && request.auth.token.email_verified == true)
+      );
     }
 
     function isOwner(userId) {
@@ -65,7 +74,7 @@ service cloud.firestore {
     // Rules
     match /tenants/{tenantId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated(); // Allow any authenticated user to create a tenant
+      allow create: if isAuthenticated() && request.resource.data.owner_id == request.auth.uid; 
       allow update, delete: if isTenantAdmin(tenantId);
 
       match /users/{userId} {
