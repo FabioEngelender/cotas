@@ -1872,7 +1872,11 @@ function Dashboard() {
                     </button>
                   </div>
                   <button 
-                    onClick={(e) => { e.stopPropagation(); setSelectedProduct(pr); }}
+                    onClick={(e) => { 
+                      e.stopPropagation(); 
+                      console.log("Dashboard: Ver Compradores clicado para", pr.name);
+                      setSelectedProduct(pr); 
+                    }}
                     className="flex items-center gap-2 text-xs font-bold text-black/40 group-hover:text-black transition-all"
                   >
                     Ver Compradores <ChevronRight size={14} />
@@ -3811,7 +3815,7 @@ function MyPayments() {
       doc.text(splitQuotas, margin + 15, cursorY);
       cursorY += (splitQuotas.length * 5) + 2;
 
-      doc.text(`Valor: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+      doc.text(`VALOR INDIVIDUAL: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
       cursorY += 7;
       doc.text(`Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
       cursorY += 10;
@@ -3893,7 +3897,7 @@ function MyPayments() {
             <tr className="border-b border-black/5 bg-black/[0.02]">
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cota</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Valor</th>
+              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Status</th>
             </tr>
           </thead>
@@ -3907,7 +3911,10 @@ function MyPayments() {
                 <td className="p-6 font-mono text-sm">
                   {new Date(inst.due_date).toLocaleDateString('pt-BR')}
                 </td>
-                <td className="p-6 font-bold">
+                <td className={cn(
+                  "p-6 font-bold",
+                  inst.status === 'pending' ? "text-amber-600" : ""
+                )}>
                   {inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </td>
                 <td className="p-6">
@@ -3984,7 +3991,7 @@ function PaymentManagement() {
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cota</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Valor</th>
+              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40 text-right">Ação</th>
             </tr>
           </thead>

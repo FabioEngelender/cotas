@@ -742,11 +742,11 @@ app.get("/api/my-quotas", authenticate, (req: any, res) => {
 app.get("/api/my-installments", authenticate, (req: any, res) => {
   const installments = db.prepare(`
     SELECT 
-      i.id,
+      MIN(i.id) as id,
       i.due_date,
-      i.amount,
-      q.number as quotaNumbers,
-      p.name as productName,
+      SUM(i.amount) as amount,
+      GROUP_CONCAT(q.number) as quotaNumbers,
+      GROUP_CONCAT(DISTINCT p.name) as productName,
       i.status,
       i.paid_at,
       u_proc.name as processed_by_name,
@@ -758,6 +758,7 @@ app.get("/api/my-installments", authenticate, (req: any, res) => {
     JOIN users u_owner ON q.owner_id = u_owner.id
     LEFT JOIN users u_proc ON i.processed_by_id = u_proc.id
     WHERE q.owner_id = ? AND i.tenant_id = ?
+    GROUP BY i.due_date, i.status, i.paid_at
     ORDER BY i.due_date ASC
   `).all(req.user.id, req.tenantId);
   res.json(installments);
@@ -766,11 +767,11 @@ app.get("/api/my-installments", authenticate, (req: any, res) => {
 app.get("/api/installments/pending", authenticate, (req: any, res) => {
   if (req.user.role === 'client') return res.status(403).json({ error: "Forbidden" });
   
-  // Condense installments by user, product and due_date
+  // Condense installments by user and due_date
   const installments = db.prepare(`
     SELECT 
       u.name as userName,
-      p.name as productName,
+      GROUP_CONCAT(DISTINCT p.name) as productName,
       i.due_date,
       SUM(i.amount) as amount,
       GROUP_CONCAT(q.number) as quotaNumbers,
@@ -780,7 +781,7 @@ app.get("/api/installments/pending", authenticate, (req: any, res) => {
     JOIN products p ON q.product_id = p.id
     JOIN users u ON q.owner_id = u.id
     WHERE i.status = 'pending' AND i.tenant_id = ?
-    GROUP BY u.id, p.id, i.due_date
+    GROUP BY u.id, i.due_date
     ORDER BY i.due_date ASC
   `).all(req.tenantId);
   res.json(installments);
