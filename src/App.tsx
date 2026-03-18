@@ -89,10 +89,14 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
     if (this.state.hasError) {
       let errorMessage = "Ocorreu um erro inesperado.";
       try {
-        const parsed = JSON.parse(this.state.error.message);
-        if (parsed.error) errorMessage = `Erro de Permissão: ${parsed.error}`;
+        if (this.state.error?.message && this.state.error.message.trim().startsWith('{')) {
+          const parsed = JSON.parse(this.state.error.message);
+          if (parsed.error) errorMessage = `Erro de Permissão: ${parsed.error}`;
+        } else {
+          errorMessage = this.state.error?.message || errorMessage;
+        }
       } catch (e) {
-        errorMessage = this.state.error.message || errorMessage;
+        errorMessage = this.state.error?.message || errorMessage;
       }
 
       return (
@@ -157,13 +161,15 @@ export default function App() {
   }, [tenantId]);
 
   useEffect(() => {
-    if (tenantId) {
+    if (tenantId && user) {
       const unsub = onSnapshot(doc(db, 'tenants', tenantId, 'settings', 'general'), (doc) => {
         if (doc.exists()) setSettings(doc.data());
+      }, (error) => {
+        console.error("Error fetching settings:", error);
       });
       return () => unsub();
     }
-  }, [tenantId]);
+  }, [tenantId, user]);
 
   const handleSetTenantId = (id: string | null) => {
     if (id) localStorage.setItem('tenantId', id);
