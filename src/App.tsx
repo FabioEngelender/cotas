@@ -144,12 +144,20 @@ export default function App() {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser && savedTenantId) {
-        const userDoc = await getDoc(doc(db, 'tenants', savedTenantId, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          setUser({ id: firebaseUser.uid, ...userDoc.data() });
-        } else {
-          // Handle case where user exists in Auth but not in our Firestore tenant
+        try {
+          const userDoc = await getDoc(doc(db, 'tenants', savedTenantId, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setUser({ id: firebaseUser.uid, ...userDoc.data() });
+          } else {
+            setUser(null);
+          }
+        } catch (err: any) {
+          console.error("Error fetching user profile:", err);
           setUser(null);
+          if (err.code === 'permission-denied') {
+            localStorage.removeItem('tenantId');
+            setTenantId(null);
+          }
         }
       } else {
         setUser(null);
@@ -937,9 +945,23 @@ function RegisterTenant() {
     setLoading(true);
 
     try {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      const firebaseUser = result.user;
+      let firebaseUser = auth.currentUser;
+      
+      if (!firebaseUser) {
+        const provider = new GoogleAuthProvider();
+        try {
+          const result = await signInWithPopup(auth, provider);
+          firebaseUser = result.user;
+        } catch (popupErr: any) {
+          console.error("Popup error:", popupErr);
+          if (popupErr.code === 'auth/popup-blocked') {
+            throw new Error('O popup foi bloqueado pelo navegador. Por favor, permita popups para este site ou abra o app em uma nova aba.');
+          }
+          throw popupErr;
+        }
+      }
+
+      if (!firebaseUser) throw new Error('Usuário não autenticado');
 
       const batch = writeBatch(db);
       

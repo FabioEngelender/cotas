@@ -27,6 +27,11 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function getTenantData(tenantId) {
+      let path = /databases/$(database)/documents/tenants/$(tenantId);
+      return exists(path) ? get(path).data : (existsAfter(path) ? getAfter(path).data : null);
+    }
+
     function getUserData(tenantId) {
       let path = /databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid);
       return exists(path) ? get(path).data : (existsAfter(path) ? getAfter(path).data : null);
@@ -34,7 +39,7 @@ service cloud.firestore {
 
     function isTenantAdmin(tenantId) {
       let userData = getUserData(tenantId);
-      let tenantData = exists(/databases/$(database)/documents/tenants/$(tenantId)) ? get(/databases/$(database)/documents/tenants/$(tenantId)).data : (existsAfter(/databases/$(database)/documents/tenants/$(tenantId)) ? getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data : null);
+      let tenantData = getTenantData(tenantId);
       
       return isAuthenticated() && (
         (userData != null && userData.role == 'admin') || 
@@ -43,14 +48,9 @@ service cloud.firestore {
       );
     }
 
-    function isTenantManager(tenantId) {
-      let userData = getUserData(tenantId);
-      return isAuthenticated() && userData != null && userData.role == 'manager';
-    }
-
     function isTenantStaff(tenantId) {
       let userData = getUserData(tenantId);
-      let tenantData = exists(/databases/$(database)/documents/tenants/$(tenantId)) ? get(/databases/$(database)/documents/tenants/$(tenantId)).data : (existsAfter(/databases/$(database)/documents/tenants/$(tenantId)) ? getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data : null);
+      let tenantData = getTenantData(tenantId);
 
       return isAuthenticated() && (
         (userData != null && (userData.role == 'admin' || userData.role == 'manager')) || 
@@ -131,8 +131,12 @@ service cloud.firestore {
 
       match /settings/{settingKey} {
         allow read: if isAuthenticated();
-        allow write: if isTenantAdmin(tenantId);
+        allow write: if isTenantAdmin(tenantId) || (request.method == 'create' && isAuthenticated() && getTenantData(tenantId).owner_id == request.auth.uid);
       }
+    }
+
+    match /test/{docId} {
+      allow read: if true;
     }
   }
 }
