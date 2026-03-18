@@ -7,6 +7,7 @@
       "properties": {
         "name": { "type": "string" },
         "cnpj": { "type": "string" },
+        "owner_id": { "type": "string" },
         "status": { "type": "string", "enum": ["active", "inactive"] },
         "image_url": { "type": "string" },
         "created_at": { "type": "string", "format": "date-time" }

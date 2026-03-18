@@ -20,11 +20,23 @@ import { db, auth, handleFirestoreError, OperationType } from './firebase.js';
 // Test connection as required
 export async function testConnection() {
   try {
+    console.log("Testing connection...");
     await getDocFromServer(doc(db, 'test', 'connection'));
+    console.log("Connection test successful (read).");
+    
+    if (auth.currentUser) {
+      console.log("Testing write to test collection...");
+      await setDoc(doc(db, 'test', auth.currentUser.uid), {
+        last_test: serverTimestamp(),
+        user: auth.currentUser.email
+      });
+      console.log("Write test successful.");
+    }
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error("Please check your Firebase configuration.");
     }
+    console.error("Connection test error:", error);
   }
 }
 

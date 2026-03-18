@@ -29,17 +29,28 @@ service cloud.firestore {
 
     function getTenantData(tenantId) {
       let path = /databases/$(database)/documents/tenants/$(tenantId);
-      return exists(path) ? get(path).data : (existsAfter(path) ? getAfter(path).data : null);
+      return exists(path) ? get(path).data : null;
+    }
+
+    function getTenantDataAfter(tenantId) {
+      let path = /databases/$(database)/documents/tenants/$(tenantId);
+      return existsAfter(path) ? getAfter(path).data : (exists(path) ? get(path).data : null);
     }
 
     function getUserData(tenantId) {
       let path = /databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid);
-      return exists(path) ? get(path).data : (existsAfter(path) ? getAfter(path).data : null);
+      return exists(path) ? get(path).data : null;
+    }
+
+    function getUserDataAfter(tenantId) {
+      let path = /databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid);
+      return existsAfter(path) ? getAfter(path).data : (exists(path) ? get(path).data : null);
     }
 
     function isTenantAdmin(tenantId) {
-      let userData = getUserData(tenantId);
-      let tenantData = getTenantData(tenantId);
+      let isWrite = request.method != 'get' && request.method != 'list';
+      let userData = isWrite ? getUserDataAfter(tenantId) : getUserData(tenantId);
+      let tenantData = isWrite ? getTenantDataAfter(tenantId) : getTenantData(tenantId);
       
       return isAuthenticated() && (
         (userData != null && userData.role == 'admin') || 
@@ -49,8 +60,9 @@ service cloud.firestore {
     }
 
     function isTenantStaff(tenantId) {
-      let userData = getUserData(tenantId);
-      let tenantData = getTenantData(tenantId);
+      let isWrite = request.method != 'get' && request.method != 'list';
+      let userData = isWrite ? getUserDataAfter(tenantId) : getUserData(tenantId);
+      let tenantData = isWrite ? getTenantDataAfter(tenantId) : getTenantData(tenantId);
 
       return isAuthenticated() && (
         (userData != null && (userData.role == 'admin' || userData.role == 'manager')) || 
@@ -74,20 +86,14 @@ service cloud.firestore {
     // Rules
     match /tenants/{tenantId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.owner_id == request.auth.uid; 
-      allow update, delete: if isTenantAdmin(tenantId);
+      allow create: if isAuthenticated() && (request.resource.data.owner_id == request.auth.uid || isAdmin()); 
+      allow update, delete: if isTenantAdmin(tenantId) || isAdmin();
 
       match /users/{userId} {
-        allow read: if isAuthenticated() && (isOwner(userId) || isTenantStaff(tenantId));
-        allow create: if isAuthenticated() && (
-          isOwner(userId) || 
-          isTenantAdmin(tenantId)
-        );
-        allow update: if isAuthenticated() && (
-          (isOwner(userId) && request.resource.data.role == resource.data.role) || 
-          isTenantAdmin(tenantId)
-        );
-        allow delete: if isTenantAdmin(tenantId);
+        allow read: if isAuthenticated() && (isOwner(userId) || isTenantStaff(tenantId) || isAdmin());
+        allow create: if isAuthenticated() && (isOwner(userId) || isTenantAdmin(tenantId) || isAdmin());
+        allow update: if isAuthenticated() && (isOwner(userId) || isTenantAdmin(tenantId) || isAdmin());
+        allow delete: if isTenantAdmin(tenantId) || isAdmin();
       }
 
       match /quotas/{quotaId} {
@@ -133,13 +139,14 @@ service cloud.firestore {
         allow read: if isAuthenticated();
         allow write: if isAuthenticated() && (
           isTenantAdmin(tenantId) || 
-          (request.method == 'create' && getTenantData(tenantId).owner_id == request.auth.uid)
+          (request.method == 'create' && (getTenantData(tenantId).owner_id == request.auth.uid || isAdmin())) ||
+          isAdmin()
         );
       }
     }
 
     match /test/{docId} {
-      allow read: if true;
+      allow read, write: if isAuthenticated();
     }
   }
 }

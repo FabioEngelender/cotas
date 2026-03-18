@@ -980,40 +980,41 @@ function RegisterTenant() {
       const tenantRef = doc(collection(db, 'tenants'));
       
       // Create tenant
-      batch.set(tenantRef, {
-        name: formData.name,
-        cnpj: formData.cnpj,
-        image_url: formData.image_url,
-        status: 'active',
-        owner_id: firebaseUser.uid,
-        created_at: serverTimestamp()
-      });
-
-      // Create admin user
-      const userRef = doc(db, 'tenants', tenantRef.id, 'users', firebaseUser.uid);
-      batch.set(userRef, {
-        name: formData.adminName,
-        email: firebaseUser.email,
-        role: 'admin',
-        tenant_id: tenantRef.id,
-        created_at: serverTimestamp()
-      });
-
-      // Seed default settings
-      const settingsRef = doc(db, 'tenants', tenantRef.id, 'settings', 'general');
-      batch.set(settingsRef, {
-        app_name: formData.name,
-        primary_color: '#141414',
-        logo_url: formData.image_url
-      });
-
       try {
-        console.log("Committing batch for tenant:", tenantRef.id);
-        await batch.commit();
-        console.log("Batch committed successfully");
+        console.log("Creating tenant document:", tenantRef.id);
+        await setDoc(tenantRef, {
+          name: formData.name,
+          cnpj: formData.cnpj,
+          image_url: formData.image_url,
+          status: 'active',
+          owner_id: firebaseUser.uid,
+          created_at: serverTimestamp()
+        });
+        console.log("Tenant document created successfully.");
+
+        console.log("Creating user document:", firebaseUser.uid);
+        const userRef = doc(db, 'tenants', tenantRef.id, 'users', firebaseUser.uid);
+        await setDoc(userRef, {
+          name: formData.adminName,
+          email: firebaseUser.email,
+          role: 'admin',
+          tenant_id: tenantRef.id,
+          created_at: serverTimestamp()
+        });
+        console.log("User document created successfully.");
+
+        console.log("Creating settings document...");
+        const settingsRef = doc(db, 'tenants', tenantRef.id, 'settings', 'general');
+        await setDoc(settingsRef, {
+          app_name: formData.name,
+          primary_color: '#141414',
+          logo_url: formData.image_url
+        });
+        console.log("Settings document created successfully.");
       } catch (err: any) {
-        console.error("Batch commit failed:", err);
+        console.error("Operation failed:", err);
         handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantRef.id}`);
+        throw err;
       }
 
       setTenantId(tenantRef.id);
