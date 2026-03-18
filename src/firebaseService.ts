@@ -19,8 +19,10 @@ import { db, auth, handleFirestoreError, OperationType } from './firebase.js';
 
 // Test connection as required
 export async function testConnection() {
+  console.log("Testing connection...");
+  console.log("Auth state:", auth.currentUser ? `Logged in as ${auth.currentUser.email}` : "Not logged in");
   try {
-    console.log("Testing connection...");
+    console.log("Attempting read from test/connection...");
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log("Connection test successful (read).");
     
@@ -32,11 +34,15 @@ export async function testConnection() {
       });
       console.log("Write test successful.");
     }
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error("Please check your Firebase configuration.");
     }
-    console.error("Connection test error:", error);
+    console.error("Connection test error detail:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack
+    });
   }
 }
 

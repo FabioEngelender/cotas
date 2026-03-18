@@ -148,11 +148,16 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    testConnection();
-    const savedTenantId = localStorage.getItem('tenantId');
-    if (savedTenantId) setTenantId(savedTenantId);
-
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        console.log("Auth state changed: User logged in", firebaseUser.email);
+        // Only test connection when logged in to avoid initial unauth errors
+        testConnection();
+      } else {
+        console.log("Auth state changed: No user");
+      }
+
+      const savedTenantId = localStorage.getItem('tenantId');
       if (firebaseUser && savedTenantId) {
         try {
           const userDoc = await getDoc(doc(db, 'tenants', savedTenantId, 'users', firebaseUser.uid));
@@ -947,7 +952,7 @@ function RegisterTenant() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { setTenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId, setTenantId, isAuthReady } = React.useContext(AuthContext)!;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1127,6 +1132,33 @@ function RegisterTenant() {
               {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Criar Loja com Google'}
             </button>
           </form>
+
+          {/* Debug Section */}
+          <div className="mt-8 p-6 bg-black/5 rounded-3xl border border-black/10">
+            <h4 className="font-bold mb-4">Debug de Conexão</h4>
+            <div className="space-y-2 text-[10px] font-mono">
+              <p>Auth Ready: {isAuthReady ? "Sim" : "Não"}</p>
+              <p>User: {user ? user.email : "Não logado"}</p>
+              <p>Auth.currentUser: {auth.currentUser ? auth.currentUser.email : "null"}</p>
+              <p>Tenant ID: {tenantId || "null"}</p>
+            </div>
+            <button 
+              type="button"
+              onClick={() => testConnection()}
+              className="mt-4 w-full px-4 py-2 bg-black/10 hover:bg-black/20 rounded-xl text-xs font-bold transition-all"
+            >
+              Testar Conexão Agora
+            </button>
+            
+            {auth.currentUser === null && (
+              <div className="mt-4 p-4 bg-amber-50 rounded-2xl border border-amber-200">
+                <p className="text-[10px] text-amber-800 leading-tight">
+                  <strong>Aviso:</strong> Se você estiver usando aba anônima ou bloqueando cookies de terceiros, o login do Google pode falhar no iframe. 
+                  Tente abrir o app em uma nova aba se o erro persistir.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </motion.div>
     </div>
