@@ -1,5 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
+import * as React from 'react';
+import { useState } from 'react';
+import { useEffect } from 'react';
+import { BrowserRouter as Router } from 'react-router-dom';
+import { Routes } from 'react-router-dom';
+import { Route } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Package, 
@@ -71,10 +80,10 @@ import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimest
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean, error: any }> {
+class ErrorBoundary extends (React.Component as any) {
   constructor(props: any) {
     super(props);
-    this.state = { hasError: false, error: null };
+    (this as any).state = { hasError: false, error: null };
   }
 
   static getDerivedStateFromError(error: any) {
@@ -86,17 +95,18 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 
   render() {
-    if (this.state.hasError) {
+    const { hasError, error } = (this as any).state;
+    if (hasError) {
       let errorMessage = "Ocorreu um erro inesperado.";
       try {
-        if (this.state.error?.message && this.state.error.message.trim().startsWith('{')) {
-          const parsed = JSON.parse(this.state.error.message);
+        if (error?.message && error.message.trim().startsWith('{')) {
+          const parsed = JSON.parse(error.message);
           if (parsed.error) errorMessage = `Erro de Permissão: ${parsed.error}`;
         } else {
-          errorMessage = this.state.error?.message || errorMessage;
+          errorMessage = error?.message || errorMessage;
         }
       } catch (e) {
-        errorMessage = this.state.error?.message || errorMessage;
+        errorMessage = error?.message || errorMessage;
       }
 
       return (
@@ -115,7 +125,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
       );
     }
 
-    return this.props.children;
+    return (this as any).props.children;
   }
 }
 
@@ -963,6 +973,7 @@ function RegisterTenant() {
 
       if (!firebaseUser) throw new Error('Usuário não autenticado');
 
+      console.log("Creating tenant for user:", firebaseUser.uid);
       const batch = writeBatch(db);
       
       // Generate tenant ID
@@ -997,8 +1008,11 @@ function RegisterTenant() {
       });
 
       try {
+        console.log("Committing batch for tenant:", tenantRef.id);
         await batch.commit();
+        console.log("Batch committed successfully");
       } catch (err: any) {
+        console.error("Batch commit failed:", err);
         handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantRef.id}`);
       }
 

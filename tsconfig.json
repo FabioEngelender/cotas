@@ -6,6 +6,7 @@
     "rootDir": ".",
     "outDir": "dist",
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "strict": false,
     "skipLibCheck": true,
     "jsx": "react-jsx"

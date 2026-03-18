@@ -80,7 +80,7 @@ service cloud.firestore {
       match /users/{userId} {
         allow read: if isAuthenticated() && (isOwner(userId) || isTenantStaff(tenantId));
         allow create: if isAuthenticated() && (
-          (isOwner(userId) && (request.resource.data.role == 'client' || request.resource.data.role == 'admin')) || 
+          isOwner(userId) || 
           isTenantAdmin(tenantId)
         );
         allow update: if isAuthenticated() && (
@@ -131,7 +131,10 @@ service cloud.firestore {
 
       match /settings/{settingKey} {
         allow read: if isAuthenticated();
-        allow write: if isTenantAdmin(tenantId) || (request.method == 'create' && isAuthenticated() && getTenantData(tenantId).owner_id == request.auth.uid);
+        allow write: if isAuthenticated() && (
+          isTenantAdmin(tenantId) || 
+          (request.method == 'create' && getTenantData(tenantId).owner_id == request.auth.uid)
+        );
       }
     }
 
