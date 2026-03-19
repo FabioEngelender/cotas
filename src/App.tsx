@@ -486,11 +486,14 @@ function SidebarLink({ to, icon, label, isOpen }: { to: string, icon: React.Reac
 
 function TenantSelection() {
   const [tenants, setTenants] = useState<any[]>([]);
-  const { setTenantId } = React.useContext(AuthContext)!;
+  const { setTenantId, user, login, logout } = React.useContext(AuthContext)!;
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [newTenant, setNewTenant] = useState({ name: '', cnpj: '' });
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const isMasterAdmin = auth.currentUser?.email === "gamerengelender@gmail.com";
 
   const fetchTenants = () => {
     const q = query(collection(db, 'tenants'), where('status', '==', 'active'));
@@ -507,6 +510,22 @@ function TenantSelection() {
     const unsub = fetchTenants();
     return () => unsub();
   }, []);
+
+  const handleDeleteTenant = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm('Tem certeza que deseja excluir esta loja permanentemente?')) return;
+    
+    setDeletingId(id);
+    try {
+      // In a real app, we'd delete subcollections too, but for reset:
+      await updateDoc(doc(db, 'tenants', id), { status: 'deleted' });
+    } catch (err: any) {
+      console.error(err);
+      alert('Erro ao excluir: ' + err.message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const handleCreateTenant = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -564,14 +583,14 @@ function TenantSelection() {
           <p className="text-[#141414]/60">Selecione uma loja para acessar o sistema</p>
         </div>
 
-        <div className="flex flex-col items-center gap-6">
-          {tenants.filter(t => t.name !== 'CotaMaster Matriz').map((tenant) => (
+      <div className="flex flex-col items-center gap-6">
+        {tenants.filter(t => t.name !== 'CotaMaster Matriz').map((tenant) => (
+          <div key={tenant.id} className="relative w-full max-w-[500px] group">
             <motion.button
-              key={tenant.id}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => setTenantId(tenant.id)}
-              className="p-6 transition-all text-left group w-full max-w-[500px] flex items-center gap-8"
+              className="p-6 transition-all text-left w-full flex items-center gap-8 bg-white/50 hover:bg-white rounded-[32px] border border-transparent hover:border-black/5"
             >
               <motion.div 
                 whileHover={{ scale: 1.1 }}
@@ -593,12 +612,46 @@ function TenantSelection() {
               </motion.div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-2xl font-serif italic group-hover:text-[#141414] transition-colors">{tenant.name}</h3>
+                {tenant.cnpj && <p className="text-[10px] text-black/30 mt-1 uppercase tracking-widest">{tenant.cnpj}</p>}
               </div>
             </motion.button>
-          ))}
-        </div>
+            
+            {isMasterAdmin && (
+              <button
+                onClick={(e) => handleDeleteTenant(tenant.id, e)}
+                disabled={deletingId === tenant.id}
+                className="absolute top-4 right-4 p-3 bg-red-50 text-red-500 rounded-full opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white"
+                title="Excluir Loja"
+              >
+                {deletingId === tenant.id ? <RefreshCw size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
 
         <div className="mt-20 text-center space-y-4">
+          <div className="flex justify-center gap-4 mb-8">
+            {auth.currentUser ? (
+              <div className="flex items-center gap-4 px-4 py-2 bg-white rounded-full border border-black/5 shadow-sm">
+                <span className="text-xs font-medium text-black/60">{auth.currentUser.email}</span>
+                <button 
+                  onClick={() => logout()}
+                  className="text-[10px] font-bold uppercase tracking-widest text-red-500 hover:text-red-600"
+                >
+                  Sair
+                </button>
+              </div>
+            ) : (
+              <button 
+                onClick={() => login()}
+                className="px-6 py-2 bg-white rounded-full border border-black/5 shadow-sm text-xs font-bold hover:bg-black/5 transition-all"
+              >
+                Entrar como Administrador
+              </button>
+            )}
+          </div>
+
           <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#141414]/30">
             Termo de Uso Simplificado
           </div>
