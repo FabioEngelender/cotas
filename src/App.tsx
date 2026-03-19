@@ -149,32 +149,48 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      const currentTenantId = tenantId || localStorage.getItem('tenantId');
+      
       if (firebaseUser) {
         console.log("Auth state changed: User logged in", firebaseUser.email);
-        // Only test connection when logged in to avoid initial unauth errors
         testConnection();
-      } else {
-        console.log("Auth state changed: No user");
-      }
 
-      const savedTenantId = localStorage.getItem('tenantId');
-      if (firebaseUser && savedTenantId) {
-        try {
-          const userDoc = await getDoc(doc(db, 'tenants', savedTenantId, 'users', firebaseUser.uid));
-          if (userDoc.exists()) {
-            setUser({ id: firebaseUser.uid, ...userDoc.data() });
-          } else {
+        if (currentTenantId) {
+          try {
+            const userDocRef = doc(db, 'tenants', currentTenantId, 'users', firebaseUser.uid);
+            const userDoc = await getDoc(userDocRef);
+            
+            if (userDoc.exists()) {
+              setUser({ id: firebaseUser.uid, ...userDoc.data() });
+            } else if (firebaseUser.email === "gamerengelender@gmail.com") {
+              // Auto-provision default admin if missing in this tenant
+              const adminProfile = {
+                name: firebaseUser.displayName || 'Admin Master',
+                email: firebaseUser.email,
+                role: 'admin',
+                tenant_id: currentTenantId,
+                created_at: serverTimestamp()
+              };
+              await setDoc(userDocRef, adminProfile);
+              setUser({ id: firebaseUser.uid, ...adminProfile });
+              console.log("Auto-provisioned admin profile for", firebaseUser.email);
+            } else {
+              console.log("User profile not found in tenant:", currentTenantId);
+              setUser(null);
+            }
+          } catch (err: any) {
+            console.error("Error fetching user profile:", err);
             setUser(null);
+            if (err.code === 'permission-denied') {
+              // If we can't even read the user doc, something is wrong with permissions or tenant
+              console.warn("Permission denied reading user profile. Clearing tenant.");
+            }
           }
-        } catch (err: any) {
-          console.error("Error fetching user profile:", err);
+        } else {
           setUser(null);
-          if (err.code === 'permission-denied') {
-            localStorage.removeItem('tenantId');
-            setTenantId(null);
-          }
         }
       } else {
+        console.log("Auth state changed: No user");
         setUser(null);
       }
       setIsAuthReady(true);
@@ -211,7 +227,7 @@ export default function App() {
     setUser(null);
   };
 
-  if (!isAuthReady) return <div className="flex items-center justify-center h-screen">Carregando...</div>;
+  if (!isAuthReady) return <div className="flex items-center justify-center h-screen"><span>Carregando...</span></div>;
 
   return (
     <ErrorBoundary>
@@ -338,6 +354,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
       <AnimatePresence>
         {isMobileMenuOpen && (
           <motion.div 
+            key="mobile-menu-overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -498,12 +515,26 @@ function TenantSelection() {
       const docRef = await addDoc(collection(db, 'tenants'), {
         ...newTenant,
         status: 'active',
-        created_at: serverTimestamp()
+        created_at: serverTimestamp(),
+        owner_uid: auth.currentUser?.uid || null
       });
+      
       // Seed default settings for the new tenant
       await setDoc(doc(db, 'tenants', docRef.id, 'settings', 'general'), {
         app_name: newTenant.name
       });
+
+      // If user is logged in, create their admin profile immediately
+      if (auth.currentUser) {
+        await setDoc(doc(db, 'tenants', docRef.id, 'users', auth.currentUser.uid), {
+          name: auth.currentUser.displayName || 'Admin',
+          email: auth.currentUser.email,
+          role: 'admin',
+          tenant_id: docRef.id,
+          created_at: serverTimestamp()
+        });
+      }
+
       setShowCreate(false);
     } catch (err: any) {
       console.error(err);
@@ -604,10 +635,11 @@ function TenantSelection() {
             <Shield className="w-12 h-12 mx-auto mb-4 text-[#141414]/10" />
             <p className="text-[#141414]/40 mb-6">Nenhuma loja ativa encontrada.</p>
             <button 
+              type="button"
               onClick={() => setShowCreate(true)}
               className="px-8 py-4 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all"
             >
-              Criar Primeira Loja
+              <span>Criar Primeira Loja</span>
             </button>
           </div>
         )}
@@ -668,19 +700,19 @@ function TenantSelection() {
 function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login, tenantId, setTenantId } = React.useContext(AuthContext)!;
+  const { login, tenantId, setTenantId, user, logout } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
 
   const handleGoogleLogin = async () => {
+    if (loading) return;
     setError('');
     setLoading(true);
     try {
       await login();
-      navigate('/');
+      // The onAuthStateChanged listener in App will handle the state update and navigation
     } catch (err: any) {
       console.error(err);
       setError('Erro ao entrar com Google: ' + (err.message || 'Erro desconhecido'));
-    } finally {
       setLoading(false);
     }
   };
@@ -688,18 +720,18 @@ function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <motion.div 
-        key="login-form"
+        key="login-container"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
         className="max-w-md w-full"
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
           <button 
+            type="button"
             onClick={() => setTenantId(null)}
             className="mb-8 flex items-center text-sm text-[#141414]/40 hover:text-[#141414] transition-colors"
           >
-            <ArrowLeft className="w-4 h-4 mr-1" /> Voltar para seleção de lojas
+            <ArrowLeft className="w-4 h-4 mr-1" /> <span>Voltar para seleção de lojas</span>
           </button>
 
           <div className="mb-10 text-center">
@@ -713,8 +745,21 @@ function Login() {
                 {error}
               </div>
             )}
+
+            {auth.currentUser && !user && !loading && (
+              <div className="p-4 bg-amber-50 text-amber-700 text-sm rounded-2xl border border-amber-100 mb-4">
+                <span>Você está conectado como <strong>{auth.currentUser.email}</strong>, mas não possui um perfil nesta loja. Por favor, solicite um convite ao administrador.</span>
+                <button 
+                  onClick={() => logout()}
+                  className="block mt-2 text-xs font-bold underline uppercase tracking-widest"
+                >
+                  Sair e tentar outra conta
+                </button>
+              </div>
+            )}
             
             <button
+              type="button"
               onClick={handleGoogleLogin}
               disabled={loading}
               className="w-full py-5 bg-white border border-black/10 text-black rounded-2xl font-medium hover:bg-black/5 transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-sm"
@@ -737,7 +782,7 @@ function Login() {
 
           <div className="mt-8 pt-8 border-t border-[#141414]/5 text-center">
             <p className="text-sm text-[#141414]/40">
-              Ao entrar, você concorda com nossos termos de uso.
+              <span>Ao entrar, você concorda com nossos termos de uso.</span>
             </p>
           </div>
         </div>
@@ -796,10 +841,8 @@ function RegisterClient() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-[#F5F5F0]">
       <motion.div 
-        key="register-tenant-form"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
         className="max-w-md w-full"
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
@@ -1040,7 +1083,6 @@ function RegisterTenant() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-[#F5F5F0]">
       <motion.div 
-        key="register-tenant-container"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         className="max-w-md w-full"
@@ -1307,15 +1349,16 @@ function Register() {
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
           <button 
+            type="button"
             onClick={() => setTenantId(null)}
             className="mb-8 flex items-center text-sm text-[#141414]/40 hover:text-[#141414] transition-colors"
           >
-            <ArrowLeft className="w-4 h-4 mr-1" /> Voltar para seleção de lojas
+            <ArrowLeft className="w-4 h-4 mr-1" /> <span>Voltar para seleção de lojas</span>
           </button>
 
           <div className="mb-10">
-            <h2 className="text-3xl font-serif italic mb-2">Cadastre-se</h2>
-            <p className="text-[#141414]/60">Crie sua conta para começar a investir</p>
+            <h2 className="text-3xl font-serif italic mb-2"><span>Cadastre-se</span></h2>
+            <p className="text-[#141414]/60"><span>Crie sua conta para começar a investir</span></p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -2150,10 +2193,11 @@ function ProductsList() {
       </div>
 
       {/* Create Product Modal Placeholder */}
-      <AnimatePresence>
+      <AnimatePresence mode="wait">
         {showCreate && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+          <div key="create-product-modal" className="fixed inset-0 z-[100] flex items-center justify-center p-6">
             <motion.div 
+              key="modal-overlay"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -2161,6 +2205,7 @@ function ProductsList() {
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
             <motion.div 
+              key="modal-content"
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
