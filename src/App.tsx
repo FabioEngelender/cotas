@@ -659,8 +659,7 @@ function TenantSelection() {
                   }
                 }}
                 disabled={isLoggingIn}
-                className="p-2 text-[#141414]/20 hover:text-[#141414]/40 transition-all disabled:opacity-50"
-                title="Entrar como Administrador"
+                className="p-2 text-[#141414]/5 cursor-default disabled:opacity-50"
               >
                 {isLoggingIn ? <RefreshCw size={16} className="animate-spin" /> : <Clover size={16} />}
               </button>
@@ -706,68 +705,14 @@ function TenantSelection() {
           </div>
         </div>
 
-        {tenants.length === 0 && !showCreate && (
+        {tenants.length === 0 && (
           <div className="text-center p-12 bg-white rounded-3xl border border-dashed border-[#141414]/10">
             <Shield className="w-12 h-12 mx-auto mb-4 text-[#141414]/10" />
-            <p className="text-[#141414]/40 mb-6">Nenhuma loja ativa encontrada.</p>
-            <button 
-              type="button"
-              onClick={() => setShowCreate(true)}
-              className="px-8 py-4 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all"
-            >
-              <span>Criar Primeira Loja</span>
-            </button>
+            <p className="text-[#141414]/40">Nenhuma loja ativa encontrada.</p>
           </div>
         )}
 
-        {showCreate && (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="max-w-md mx-auto bg-white p-8 rounded-3xl border border-[#141414]/5 shadow-xl"
-          >
-            <h2 className="text-2xl font-bold mb-6">Nova Loja</h2>
-            <form onSubmit={handleCreateTenant} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2">Nome da Loja</label>
-                <input 
-                  type="text" 
-                  required
-                  value={newTenant.name}
-                  onChange={e => setNewTenant({...newTenant, name: e.target.value})}
-                  className="w-full px-4 py-3 bg-[#F5F5F0] rounded-xl border-none focus:ring-2 focus:ring-black outline-none transition-all"
-                  placeholder="Ex: Minha Loja de Cotas"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2">CNPJ (Opcional)</label>
-                <input 
-                  type="text" 
-                  value={newTenant.cnpj}
-                  onChange={e => setNewTenant({...newTenant, cnpj: e.target.value})}
-                  className="w-full px-4 py-3 bg-[#F5F5F0] rounded-xl border-none focus:ring-2 focus:ring-black outline-none transition-all"
-                  placeholder="00.000.000/0000-00"
-                />
-              </div>
-              <div className="flex gap-3 pt-4">
-                <button 
-                  type="button"
-                  onClick={() => setShowCreate(false)}
-                  className="flex-1 py-4 bg-[#F5F5F0] text-black rounded-2xl font-bold hover:bg-black/5 transition-all"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  type="submit"
-                  disabled={creating}
-                  className="flex-1 py-4 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all disabled:opacity-50"
-                >
-                  {creating ? 'Criando...' : 'Criar Loja'}
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        )}
+
       </motion.div>
     </div>
   );
@@ -1184,20 +1129,26 @@ function RegisterTenant() {
     setLoading(true);
 
     try {
-      // 1. Create Firebase Auth user with email/password
-      let firebaseUser;
-      try {
-        const userCredential = await createUserWithEmailAndPassword(auth, formData.adminEmail, formData.password);
-        firebaseUser = userCredential.user;
-      } catch (authErr: any) {
-        if (authErr.code === 'auth/email-already-in-use') {
-          throw new Error('Este e-mail já está em uso. Por favor, use outro ou faça login.');
+      // 1. Get or Create Firebase Auth user
+      let firebaseUser = auth.currentUser;
+      
+      // If not logged in OR logged in with different email, try to create
+      if (!firebaseUser || firebaseUser.email !== formData.adminEmail) {
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, formData.adminEmail, formData.password);
+          firebaseUser = userCredential.user;
+        } catch (authErr: any) {
+          if (authErr.code === 'auth/email-already-in-use') {
+            throw new Error('Este e-mail já está em uso. Por favor, faça login primeiro ou use outro e-mail.');
+          }
+          if (authErr.code === 'auth/weak-password') {
+            throw new Error('A senha deve ter pelo menos 6 caracteres.');
+          }
+          throw authErr;
         }
-        if (authErr.code === 'auth/weak-password') {
-          throw new Error('A senha deve ter pelo menos 6 caracteres.');
-        }
-        throw authErr;
       }
+
+      if (!firebaseUser) throw new Error('Falha na autenticação.');
 
       console.log("Creating tenant for user:", firebaseUser.uid);
       
