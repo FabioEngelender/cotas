@@ -218,8 +218,15 @@ export default function App() {
 
   const login = async () => {
     const provider = new GoogleAuthProvider();
-    const result = await signInWithPopup(auth, provider);
-    // User data will be handled by onAuthStateChanged
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err: any) {
+      if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') {
+        console.log("Login popup closed or cancelled by user.");
+        return;
+      }
+      throw err;
+    }
   };
 
   const logout = async () => {
@@ -492,6 +499,7 @@ function TenantSelection() {
   const [newTenant, setNewTenant] = useState({ name: '', cnpj: '' });
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const isMasterAdmin = auth.currentUser?.email === "gamerengelender@gmail.com";
 
@@ -644,9 +652,19 @@ function TenantSelection() {
               </div>
             ) : (
               <button 
-                onClick={() => login()}
-                className="px-6 py-2 bg-white rounded-full border border-black/5 shadow-sm text-xs font-bold hover:bg-black/5 transition-all"
+                onClick={async () => {
+                  if (isLoggingIn) return;
+                  setIsLoggingIn(true);
+                  try {
+                    await login();
+                  } finally {
+                    setIsLoggingIn(false);
+                  }
+                }}
+                disabled={isLoggingIn}
+                className="px-6 py-2 bg-white rounded-full border border-black/5 shadow-sm text-xs font-bold hover:bg-black/5 transition-all disabled:opacity-50 flex items-center gap-2"
               >
+                {isLoggingIn && <RefreshCw size={12} className="animate-spin" />}
                 Entrar como Administrador
               </button>
             )}
@@ -766,6 +784,7 @@ function Login() {
     } catch (err: any) {
       console.error(err);
       setError('Erro ao entrar com Google: ' + (err.message || 'Erro desconhecido'));
+    } finally {
       setLoading(false);
     }
   };
@@ -870,7 +889,15 @@ function RegisterClient() {
 
     try {
       const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
+      let result;
+      try {
+        result = await signInWithPopup(auth, provider);
+      } catch (popupErr: any) {
+        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
+          return;
+        }
+        throw popupErr;
+      }
       const firebaseUser = result.user;
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
@@ -1069,6 +1096,9 @@ function RegisterTenant() {
           firebaseUser = result.user;
         } catch (popupErr: any) {
           console.error("Popup error:", popupErr);
+          if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
+            return;
+          }
           if (popupErr.code === 'auth/popup-blocked') {
             throw new Error('O popup foi bloqueado pelo navegador. Por favor, permita popups para este site ou abra o app em uma nova aba.');
           }
@@ -1280,7 +1310,15 @@ function RegisterManager() {
 
     try {
       const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
+      let result;
+      try {
+        result = await signInWithPopup(auth, provider);
+      } catch (popupErr: any) {
+        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
+          return;
+        }
+        throw popupErr;
+      }
       const firebaseUser = result.user;
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
@@ -1372,7 +1410,15 @@ function Register() {
 
     try {
       const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
+      let result;
+      try {
+        result = await signInWithPopup(auth, provider);
+      } catch (popupErr: any) {
+        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
+          return;
+        }
+        throw popupErr;
+      }
       const firebaseUser = result.user;
 
       await setDoc(doc(db, 'tenants', tenantId, 'users', firebaseUser.uid), {
