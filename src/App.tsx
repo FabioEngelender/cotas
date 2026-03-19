@@ -75,7 +75,7 @@ const maskCEP = (value: string) => {
 };
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch } from 'firebase/firestore';
 import { testConnection } from './firebaseService.js';
 
@@ -639,18 +639,15 @@ function TenantSelection() {
       </div>
 
         <div className="mt-20 text-center space-y-4">
-          <div className="flex justify-center gap-4 mb-8">
-            {auth.currentUser ? (
-              <div className="flex items-center gap-4 px-4 py-2 bg-white rounded-full border border-black/5 shadow-sm">
-                <span className="text-xs font-medium text-black/60">{auth.currentUser.email}</span>
-                <button 
-                  onClick={() => logout()}
-                  className="text-[10px] font-bold uppercase tracking-widest text-red-500 hover:text-red-600"
-                >
-                  Sair
-                </button>
-              </div>
-            ) : (
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#141414]/30">
+            Termo de Uso Simplificado
+          </div>
+          <p className="max-w-md mx-auto text-[11px] leading-relaxed text-[#141414]/40 italic">
+            Ao acessar qualquer loja deste sistema, você concorda com o processamento de seus dados para fins de gestão de cotas e comunicações relacionadas, conforme a LGPD.
+          </p>
+
+          <div className="pt-4 flex flex-col items-center gap-4">
+            {!auth.currentUser ? (
               <button 
                 onClick={async () => {
                   if (isLoggingIn) return;
@@ -662,29 +659,37 @@ function TenantSelection() {
                   }
                 }}
                 disabled={isLoggingIn}
-                className="px-6 py-2 bg-white rounded-full border border-black/5 shadow-sm text-xs font-bold hover:bg-black/5 transition-all disabled:opacity-50 flex items-center gap-2"
+                className="p-2 text-[#141414]/20 hover:text-[#141414]/40 transition-all disabled:opacity-50"
+                title="Entrar como Administrador"
               >
-                {isLoggingIn && <RefreshCw size={12} className="animate-spin" />}
-                Entrar como Administrador
+                {isLoggingIn ? <RefreshCw size={16} className="animate-spin" /> : <Clover size={16} />}
               </button>
-            )}
-          </div>
-
-          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#141414]/30">
-            Termo de Uso Simplificado
-          </div>
-          <p className="max-w-md mx-auto text-[11px] leading-relaxed text-[#141414]/40 italic">
-            Ao acessar qualquer loja deste sistema, você concorda com o processamento de seus dados para fins de gestão de cotas e comunicações relacionadas, conforme a LGPD.
-          </p>
-
-          <div className="pt-4 flex flex-col items-center gap-4">
-            {tenants.find(t => t.name === 'CotaMaster Matriz') && (
-              <button 
-                onClick={() => setTenantId(tenants.find(t => t.name === 'CotaMaster Matriz').id)}
-                className="group flex flex-col items-center gap-2 transition-all"
-              >
-                <Clover className="w-5 h-5 text-emerald-500 drop-shadow-[0_0_8px_rgba(16,185,129,0.3)]" strokeWidth={1.5} />
-              </button>
+            ) : (
+              <div className="flex flex-col items-center gap-4">
+                <div className="flex items-center gap-4 px-4 py-2 bg-white rounded-full border border-black/5 shadow-sm">
+                  <span className="text-xs font-medium text-black/60">{auth.currentUser.email}</span>
+                  <button 
+                    onClick={() => logout()}
+                    className="text-[10px] font-bold uppercase tracking-widest text-red-500 hover:text-red-600"
+                  >
+                    Sair
+                  </button>
+                </div>
+                
+                {isMasterAdmin && (
+                  <button
+                    onClick={() => {
+                      const url = `${window.location.origin}/register-tenant`;
+                      navigator.clipboard.writeText(url);
+                      alert('Link de cadastro copiado: ' + url);
+                    }}
+                    className="flex items-center gap-2 px-6 py-2 bg-emerald-50 text-emerald-600 rounded-full text-xs font-bold hover:bg-emerald-100 transition-all"
+                  >
+                    <Share size={14} />
+                    Compartilhar Link para Nova Loja
+                  </button>
+                )}
+              </div>
             )}
           </div>
           
@@ -769,6 +774,8 @@ function TenantSelection() {
 }
 
 function Login() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login, tenantId, setTenantId, user, logout } = React.useContext(AuthContext)!;
@@ -780,10 +787,37 @@ function Login() {
     setLoading(true);
     try {
       await login();
-      // The onAuthStateChanged listener in App will handle the state update and navigation
     } catch (err: any) {
+      if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+        return;
+      }
       console.error(err);
       setError('Erro ao entrar com Google: ' + (err.message || 'Erro desconhecido'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loading) return;
+    if (!email || !password) {
+      setError('Por favor, preencha e-mail e senha.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err: any) {
+      console.error(err);
+      let message = 'Erro ao entrar. Verifique seus dados.';
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        message = 'E-mail ou senha incorretos.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'E-mail inválido.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -830,6 +864,53 @@ function Login() {
               </div>
             )}
             
+            <form onSubmit={handleEmailLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  E-mail
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-5 py-4 bg-[#141414]/5 border-none rounded-2xl focus:ring-2 focus:ring-[#141414]/10 transition-all outline-none"
+                  placeholder="seu@email.com"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Senha
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-5 py-4 bg-[#141414]/5 border-none rounded-2xl focus:ring-2 focus:ring-[#141414]/10 transition-all outline-none"
+                  placeholder="••••••••"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-5 bg-[#141414] text-white rounded-2xl font-medium hover:bg-[#141414]/90 transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg shadow-black/10"
+              >
+                {loading ? (
+                  <RefreshCw className="w-5 h-5 animate-spin" />
+                ) : (
+                  <span>Entrar com E-mail</span>
+                )}
+              </button>
+            </form>
+
+            <div className="relative py-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-[#141414]/5"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase tracking-widest text-[#141414]/30">
+                <span className="bg-white px-4">Ou</span>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={handleGoogleLogin}
@@ -884,21 +965,16 @@ function RegisterClient() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteTenantId) return;
+    if (!formData.email || !formData.password || !formData.name) {
+      setError('Por favor, preencha nome, e-mail e senha.');
+      return;
+    }
     setError('');
     setLoading(true);
 
     try {
-      const provider = new GoogleAuthProvider();
-      let result;
-      try {
-        result = await signInWithPopup(auth, provider);
-      } catch (popupErr: any) {
-        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
-          return;
-        }
-        throw popupErr;
-      }
-      const firebaseUser = result.user;
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const firebaseUser = userCredential.user;
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -912,7 +988,15 @@ function RegisterClient() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      setError('Erro ao realizar cadastro: ' + (err.message || 'Erro desconhecido'));
+      let message = 'Erro ao realizar cadastro. Verifique seus dados.';
+      if (err.code === 'auth/email-already-in-use') {
+        message = 'Este e-mail já está em uso.';
+      } else if (err.code === 'auth/weak-password') {
+        message = 'A senha deve ter pelo menos 6 caracteres.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'E-mail inválido.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -961,6 +1045,19 @@ function RegisterClient() {
                   onChange={(e) => setFormData({...formData, email: e.target.value.toLowerCase()})}
                   className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
                   required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-1 ml-1">
+                  Senha <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({...formData, password: e.target.value})}
+                  className="w-full px-6 py-3 bg-[#F5F5F0] rounded-xl border-none outline-none text-sm"
+                  required
+                  minLength={6}
                 />
               </div>
             </div>
@@ -1058,7 +1155,7 @@ function RegisterClient() {
               disabled={loading}
               className="w-full py-4 bg-[#141414] text-white rounded-2xl font-bold hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 mt-4 flex items-center justify-center gap-2"
             >
-              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Cadastrar com Google'}
+              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Finalizar Cadastro'}
             </button>
           </form>
         </div>
@@ -1079,7 +1176,7 @@ function RegisterTenant() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { user, tenantId, setTenantId, isAuthReady } = React.useContext(AuthContext)!;
+  const { setTenantId } = React.useContext(AuthContext)!;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1087,36 +1184,28 @@ function RegisterTenant() {
     setLoading(true);
 
     try {
-      let firebaseUser = auth.currentUser;
-      
-      if (!firebaseUser) {
-        const provider = new GoogleAuthProvider();
-        try {
-          const result = await signInWithPopup(auth, provider);
-          firebaseUser = result.user;
-        } catch (popupErr: any) {
-          console.error("Popup error:", popupErr);
-          if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
-            return;
-          }
-          if (popupErr.code === 'auth/popup-blocked') {
-            throw new Error('O popup foi bloqueado pelo navegador. Por favor, permita popups para este site ou abra o app em uma nova aba.');
-          }
-          throw popupErr;
+      // 1. Create Firebase Auth user with email/password
+      let firebaseUser;
+      try {
+        const userCredential = await createUserWithEmailAndPassword(auth, formData.adminEmail, formData.password);
+        firebaseUser = userCredential.user;
+      } catch (authErr: any) {
+        if (authErr.code === 'auth/email-already-in-use') {
+          throw new Error('Este e-mail já está em uso. Por favor, use outro ou faça login.');
         }
+        if (authErr.code === 'auth/weak-password') {
+          throw new Error('A senha deve ter pelo menos 6 caracteres.');
+        }
+        throw authErr;
       }
 
-      if (!firebaseUser) throw new Error('Usuário não autenticado');
-
       console.log("Creating tenant for user:", firebaseUser.uid);
-      const batch = writeBatch(db);
       
       // Generate tenant ID
       const tenantRef = doc(collection(db, 'tenants'));
       
       // Create tenant
       try {
-        console.log("Creating tenant document:", tenantRef.id);
         await setDoc(tenantRef, {
           name: formData.name,
           cnpj: formData.cnpj,
@@ -1125,27 +1214,22 @@ function RegisterTenant() {
           owner_id: firebaseUser.uid,
           created_at: serverTimestamp()
         });
-        console.log("Tenant document created successfully.");
 
-        console.log("Creating user document:", firebaseUser.uid);
         const userRef = doc(db, 'tenants', tenantRef.id, 'users', firebaseUser.uid);
         await setDoc(userRef, {
           name: formData.adminName,
-          email: firebaseUser.email,
+          email: formData.adminEmail,
           role: 'admin',
           tenant_id: tenantRef.id,
           created_at: serverTimestamp()
         });
-        console.log("User document created successfully.");
 
-        console.log("Creating settings document...");
         const settingsRef = doc(db, 'tenants', tenantRef.id, 'settings', 'general');
         await setDoc(settingsRef, {
           app_name: formData.name,
           primary_color: '#141414',
           logo_url: formData.image_url
         });
-        console.log("Settings document created successfully.");
       } catch (err: any) {
         console.error("Operation failed:", err);
         handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantRef.id}`);
@@ -1172,8 +1256,8 @@ function RegisterTenant() {
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
           <div className="mb-10">
-            <h2 className="text-3xl font-serif italic mb-2"><span>Criar Nova Loja</span></h2>
-            <p className="text-[#141414]/60"><span>Cadastre sua loja no sistema CotaMaster</span></p>
+            <h2 className="text-3xl font-serif italic mb-2">Criar Nova Loja</h2>
+            <p className="text-[#141414]/60">Cadastre sua loja no sistema CotaMaster</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -1194,7 +1278,30 @@ function RegisterTenant() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Nome Completo (Admin)</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Nome da Loja (Obrigatório)</label>
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">CNPJ (Opcional)</label>
+              <input
+                type="text"
+                value={formData.cnpj}
+                onChange={(e) => setFormData({...formData, cnpj: e.target.value})}
+                className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+              />
+            </div>
+
+            <div className="h-px bg-black/5 my-6" />
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Seu Nome (Admin)</label>
               <input
                 type="text"
                 value={formData.adminName}
@@ -1205,90 +1312,36 @@ function RegisterTenant() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Nome da Loja (Obrigatório)</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">E-mail de Acesso</label>
               <input
-                type="text"
-                value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                type="email"
+                value={formData.adminEmail}
+                onChange={(e) => setFormData({...formData, adminEmail: e.target.value})}
                 className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
                 required
               />
             </div>
+
             <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">CNPJ (Opcional)</label>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Senha</label>
               <input
-                type="text"
-                value={formData.cnpj}
-                onChange={(e) => setFormData({...formData, cnpj: e.target.value})}
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
                 className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                required
+                minLength={6}
               />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">URL da Logomarca (Opcional)</label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={formData.image_url}
-                  onChange={(e) => setFormData({...formData, image_url: e.target.value})}
-                  className="flex-1 px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
-                  placeholder="https://exemplo.com/logo.png"
-                />
-                <label className="p-4 bg-black/5 rounded-2xl cursor-pointer hover:bg-black/10 transition-all">
-                  <ImagePlus size={20} className="text-black/40" />
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    accept="image/*"
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setFormData({...formData, image_url: reader.result as string});
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                    }}
-                  />
-                </label>
-              </div>
             </div>
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-5 bg-[#141414] text-white rounded-[20px] font-bold hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              className="w-full py-5 bg-[#141414] text-white rounded-2xl font-medium hover:bg-[#141414]/90 transition-all disabled:opacity-50 shadow-lg shadow-black/10 flex items-center justify-center gap-2"
             >
-              <span>{loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Criar Loja com Google'}</span>
+              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Criar Loja e Perfil'}
             </button>
           </form>
-
-          {/* Debug Section */}
-          <div className="mt-8 p-6 bg-black/5 rounded-3xl border border-black/10">
-            <h4 className="font-bold mb-4">Debug de Conexão</h4>
-            <div className="space-y-2 text-[10px] font-mono">
-              <p>Auth Ready: {isAuthReady ? "Sim" : "Não"}</p>
-              <p>User: {user ? user.email : "Não logado"}</p>
-              <p>Auth.currentUser: {auth.currentUser ? auth.currentUser.email : "null"}</p>
-              <p>Tenant ID: {tenantId || "null"}</p>
-            </div>
-            <button 
-              type="button"
-              onClick={() => testConnection()}
-              className="mt-4 w-full px-4 py-2 bg-black/10 hover:bg-black/20 rounded-xl text-xs font-bold transition-all"
-            >
-              Testar Conexão Agora
-            </button>
-            
-            {auth.currentUser === null && (
-              <div className="mt-4 p-4 bg-amber-50 rounded-2xl border border-amber-200">
-                <p className="text-[10px] text-amber-800 leading-tight">
-                  <strong>Aviso:</strong> Se você estiver usando aba anônima ou bloqueando cookies de terceiros, o login do Google pode falhar no iframe. 
-                  Tente abrir o app em uma nova aba se o erro persistir.
-                </p>
-              </div>
-            )}
-          </div>
         </div>
       </motion.div>
     </div>
@@ -1305,25 +1358,20 @@ function RegisterManager() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteTenantId) return;
+    if (!formData.email || !formData.password || !formData.name) {
+      setError('Por favor, preencha todos os campos.');
+      return;
+    }
     setError('');
     setLoading(true);
 
     try {
-      const provider = new GoogleAuthProvider();
-      let result;
-      try {
-        result = await signInWithPopup(auth, provider);
-      } catch (popupErr: any) {
-        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
-          return;
-        }
-        throw popupErr;
-      }
-      const firebaseUser = result.user;
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const firebaseUser = userCredential.user;
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
-        ...formData,
-        email: firebaseUser.email,
+        name: formData.name,
+        email: formData.email,
         role: 'manager',
         tenant_id: inviteTenantId,
         created_at: serverTimestamp()
@@ -1333,7 +1381,15 @@ function RegisterManager() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      setError('Erro ao realizar cadastro: ' + (err.message || 'Erro desconhecido'));
+      let message = 'Erro ao realizar cadastro. Verifique seus dados.';
+      if (err.code === 'auth/email-already-in-use') {
+        message = 'Este e-mail já está em uso.';
+      } else if (err.code === 'auth/weak-password') {
+        message = 'A senha deve ter pelo menos 6 caracteres.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'E-mail inválido.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -1370,12 +1426,35 @@ function RegisterManager() {
               />
             </div>
 
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">E-mail</label>
+              <input
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData({...formData, email: e.target.value})}
+                className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">Senha</label>
+              <input
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
+                className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                required
+                minLength={6}
+              />
+            </div>
+
             <button
               type="submit"
               disabled={loading}
               className="w-full py-5 bg-[#141414] text-white rounded-2xl font-medium hover:bg-[#141414]/90 transition-all disabled:opacity-50 shadow-lg shadow-black/10 flex items-center justify-center gap-2"
             >
-              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Cadastrar com Google'}
+              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Cadastrar Gerente'}
             </button>
           </form>
         </div>
@@ -1405,21 +1484,16 @@ function Register() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tenantId) return;
+    if (!formData.email || !formData.password || !formData.name) {
+      setError('Por favor, preencha nome, e-mail e senha.');
+      return;
+    }
     setError('');
     setLoading(true);
 
     try {
-      const provider = new GoogleAuthProvider();
-      let result;
-      try {
-        result = await signInWithPopup(auth, provider);
-      } catch (popupErr: any) {
-        if (popupErr.code === 'auth/cancelled-popup-request' || popupErr.code === 'auth/popup-closed-by-user') {
-          return;
-        }
-        throw popupErr;
-      }
-      const firebaseUser = result.user;
+      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+      const firebaseUser = userCredential.user;
 
       await setDoc(doc(db, 'tenants', tenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -1433,7 +1507,15 @@ function Register() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      setError('Erro ao realizar cadastro: ' + (err.message || 'Erro desconhecido'));
+      let message = 'Erro ao realizar cadastro. Verifique seus dados.';
+      if (err.code === 'auth/email-already-in-use') {
+        message = 'Este e-mail já está em uso.';
+      } else if (err.code === 'auth/weak-password') {
+        message = 'A senha deve ter pelo menos 6 caracteres.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'E-mail inválido.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -1478,6 +1560,31 @@ function Register() {
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                   className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
                   required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  E-mail <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({...formData, email: e.target.value})}
+                  className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
+                  Senha <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({...formData, password: e.target.value})}
+                  className="w-full px-6 py-4 bg-[#F5F5F0] rounded-2xl border-none outline-none"
+                  required
+                  minLength={6}
                 />
               </div>
               <div>
