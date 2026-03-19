@@ -217,7 +217,7 @@ export default function App() {
     <ErrorBoundary>
       <AuthContext.Provider value={{ user, tenantId, setTenantId: handleSetTenantId, setUser, login, logout }}>
         <Router>
-          <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans">
+          <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans" translate="no">
             <Routes>
               <Route path="/" element={!tenantId ? <TenantSelection /> : (user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />)} />
               <Route path="/login" element={tenantId ? (!user ? <Login /> : <Navigate to="/" />) : <Navigate to="/" />} />
@@ -688,8 +688,10 @@ function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <motion.div 
+        key="login-form"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
         className="max-w-md w-full"
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
@@ -701,8 +703,8 @@ function Login() {
           </button>
 
           <div className="mb-10 text-center">
-            <h2 className="text-3xl font-serif italic mb-2">Entrar</h2>
-            <p className="text-[#141414]/60">Acesse sua conta para continuar</p>
+            <h2 className="text-3xl font-serif italic mb-2"><span>Entrar</span></h2>
+            <p className="text-[#141414]/60"><span>Acesse sua conta para continuar</span></p>
           </div>
 
           <div className="space-y-6">
@@ -727,7 +729,7 @@ function Login() {
                     <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
                     <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                   </svg>
-                  Entrar com Google
+                  <span>Entrar com Google</span>
                 </>
               )}
             </button>
@@ -794,8 +796,10 @@ function RegisterClient() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-[#F5F5F0]">
       <motion.div 
+        key="register-tenant-form"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
         className="max-w-md w-full"
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
@@ -1036,14 +1040,15 @@ function RegisterTenant() {
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-[#F5F5F0]">
       <motion.div 
+        key="register-tenant-container"
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         className="max-w-md w-full"
       >
         <div className="bg-white p-10 rounded-[32px] border border-[#141414]/5 shadow-xl">
           <div className="mb-10">
-            <h2 className="text-3xl font-serif italic mb-2">Criar Nova Loja</h2>
-            <p className="text-[#141414]/60">Cadastre sua loja no sistema CotaMaster</p>
+            <h2 className="text-3xl font-serif italic mb-2"><span>Criar Nova Loja</span></h2>
+            <p className="text-[#141414]/60"><span>Cadastre sua loja no sistema CotaMaster</span></p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -1129,7 +1134,7 @@ function RegisterTenant() {
               disabled={loading}
               className="w-full py-5 bg-[#141414] text-white rounded-[20px] font-bold hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Criar Loja com Google'}
+              <span>{loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : 'Criar Loja com Google'}</span>
             </button>
           </form>
 
