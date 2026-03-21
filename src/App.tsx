@@ -142,6 +142,8 @@ const AuthContext = React.createContext<{
 
 // Firebase initialization is handled in firebase.ts
 
+export const ADMIN_MASTER_EMAIL = 'gamerengelender@gmail.com';
+
 export default function App() {
   const [user, setUser] = useState<any | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -1898,7 +1900,7 @@ function SettingsPage() {
           <h2 className="text-3xl font-bold tracking-tight">Configurações</h2>
           <p className="text-black/50">Gerencie a identidade e dados do sistema</p>
         </div>
-        {user?.role === 'admin' && (
+        {user?.email === ADMIN_MASTER_EMAIL && (
           <button 
             onClick={deleteCurrentTenant}
             className="px-6 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors flex items-center gap-2"
@@ -1920,7 +1922,11 @@ function SettingsPage() {
                 type="text" 
                 value={settings.app_name}
                 onChange={e => setSettings({...settings, app_name: e.target.value})}
-                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
+                readOnly={user?.email === ADMIN_MASTER_EMAIL}
+                className={cn(
+                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
+                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
+                )}
               />
             </div>
             <div>
@@ -1929,7 +1935,11 @@ function SettingsPage() {
                 type="text" 
                 value={settings.admin_name}
                 onChange={e => setSettings({...settings, admin_name: e.target.value})}
-                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
+                readOnly={user?.email === ADMIN_MASTER_EMAIL}
+                className={cn(
+                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
+                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
+                )}
               />
             </div>
             <div>
@@ -1938,17 +1948,23 @@ function SettingsPage() {
                 type="password" 
                 value={settings.password || ''}
                 onChange={e => setSettings({...settings, password: e.target.value})}
-                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
-                placeholder="Deixe em branco para não alterar"
+                readOnly={user?.email === ADMIN_MASTER_EMAIL}
+                className={cn(
+                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
+                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
+                )}
+                placeholder={user?.email === ADMIN_MASTER_EMAIL ? "Apenas o admin da loja pode alterar" : "Deixe em branco para não alterar"}
               />
             </div>
-            <button 
-              onClick={handleSave}
-              disabled={loading}
-              className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50"
-            >
-              {loading ? 'Salvando...' : 'Salvar Alterações'}
-            </button>
+            {user?.email !== ADMIN_MASTER_EMAIL && (
+              <button 
+                onClick={handleSave}
+                disabled={loading}
+                className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50"
+              >
+                {loading ? 'Salvando...' : 'Salvar Alterações'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -2526,7 +2542,7 @@ function ProductsList() {
               </div>
               <div className="p-6">
                 <h3 className="font-bold text-xl mb-2">{product.name}</h3>
-                <p className="text-sm text-black/50 line-clamp-2 mb-4">{product.description}</p>
+                <p className="text-sm text-black/50 line-clamp-6 mb-4">{product.description}</p>
                 <div className="flex items-center justify-between pt-4 border-t border-black/5">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Valor da Cota</p>
@@ -2793,9 +2809,11 @@ function ProductDetail() {
             const installmentRef = doc(collection(db, 'tenants', tenantId, 'installments'));
             batch.set(installmentRef, {
               quota_id: qId,
+              quota_number: quota.number || '',
               product_id: product.id,
               product_name: product.name,
               owner_id: user.id,
+              owner_name: user.name,
               amount: amountPerInstallment,
               due_date: dueDate.toISOString().split('T')[0],
               status: 'pending',
@@ -2810,6 +2828,28 @@ function ProductDetail() {
           batch.update(productRef, {
             sold_quotas: increment(selectedQuotas.length),
             available_quotas: increment(-selectedQuotas.length)
+          });
+
+          // Update user signed term status
+          const userRef = doc(db, 'tenants', tenantId, 'users', user.id);
+          const signedAt = now.toISOString();
+          batch.update(userRef, {
+            signed_term_at: signedAt
+          });
+          setUser({ ...user, signed_term_at: signedAt });
+
+          // Create signature record
+          const signatureRef = doc(collection(db, 'tenants', tenantId, 'signatures'));
+          batch.set(signatureRef, {
+            user_id: user.id,
+            user_name: user.name,
+            user_cpf: user.cpf || '',
+            product_id: product.id,
+            product_name: product.name,
+            quotas: selectedQuotas.map(id => quotas.find(q => q.id === id)?.number || id),
+            signed_at: now.toISOString(),
+            term_content: termContent,
+            createdAt: serverTimestamp()
           });
 
           // Log audit
@@ -3157,6 +3197,11 @@ function ProductDetail() {
               />
             </div>
           )}
+          <div className="bg-white rounded-3xl p-8 border border-black/5 shadow-sm">
+            <h3 className="font-bold text-xl mb-4">Descrição do Produto</h3>
+            <p className="text-black/70 leading-relaxed whitespace-pre-wrap">{product.description || 'Sem descrição disponível.'}</p>
+          </div>
+
           <div className="bg-white rounded-3xl p-8 border border-black/5 shadow-sm">
             <div className="flex items-center justify-between mb-8">
               <h3 className="font-bold text-xl">Mapa de Cotas</h3>
@@ -3715,7 +3760,34 @@ function ClientsList() {
         const installmentsSnap = await getDocs(query(installmentsRef, where('owner_id', '==', id)));
         const installments = installmentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-        setSelectedUserDetails({ user: userData, quotas, installments });
+        // Group quotas by product
+        const productGroups: { [key: string]: any } = {};
+        quotas.forEach((q: any) => {
+          if (!productGroups[q.product_id]) {
+            productGroups[q.product_id] = {
+              name: q.productName || 'Produto',
+              quotaCount: 0,
+              quotaNumbers: [],
+              pendingValue: 0
+            };
+          }
+          productGroups[q.product_id].quotaCount++;
+          productGroups[q.product_id].quotaNumbers.push(q.number);
+        });
+
+        // Add pending values from installments
+        installments.forEach((inst: any) => {
+          if (inst.status === 'pending' && productGroups[inst.product_id]) {
+            productGroups[inst.product_id].pendingValue += inst.amount;
+          }
+        });
+
+        setSelectedUserDetails({ 
+          user: userData, 
+          quotas, 
+          installments,
+          products: Object.values(productGroups)
+        });
       }
     } catch (err) {
       console.error(err);
@@ -4298,10 +4370,21 @@ function AuditLogs() {
 
 function MyQuotas() {
   const [quotas, setQuotas] = useState<any[]>([]);
+  const [termContent, setTermContent] = useState('');
   const { user, tenantId } = React.useContext(AuthContext)!;
 
   useEffect(() => {
     if (!tenantId || !user) return;
+    
+    // Fetch active term
+    const termsRef = collection(db, 'tenants', tenantId, 'terms');
+    const termsQuery = query(termsRef, where('is_active', '==', true), limit(1));
+    getDocs(termsQuery).then(snapshot => {
+      if (!snapshot.empty) {
+        setTermContent(snapshot.docs[0].data().content);
+      }
+    });
+
     const q = query(
       collection(db, 'tenants', tenantId, 'quotas'), 
       where('owner_id', '==', user.id),
@@ -4333,11 +4416,89 @@ function MyQuotas() {
     return () => unsubscribe();
   }, [tenantId, user]);
 
+  const downloadMyTerm = () => {
+    if (!user.signed_term_at) return alert('Você ainda não assinou o termo.');
+    
+    const productGroups: { [key: string]: any } = {};
+    quotas.forEach((q: any) => {
+      if (!productGroups[q.product_id]) {
+        productGroups[q.product_id] = { name: q.productName, numbers: [] };
+      }
+      productGroups[q.product_id].numbers.push(q.number);
+    });
+
+    const quotasStr = Object.values(productGroups).map((p: any) => 
+      `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')})`
+    ).join(', ');
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 14;
+    let cursorY = 20;
+
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+    cursorY += 10;
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(50, 50, 50);
+    const splitTerm = doc.splitTextToSize(termContent || 'Termos de adesão...', pageWidth - (margin * 2));
+    
+    for (let i = 0; i < splitTerm.length; i++) {
+      if (cursorY > pageHeight - 40) {
+        doc.addPage();
+        cursorY = 20;
+      }
+      doc.text(splitTerm[i], margin, cursorY);
+      cursorY += 5;
+    }
+
+    cursorY += 10;
+    doc.setDrawColor(200, 200, 200);
+    doc.line(margin, cursorY, pageWidth - margin, cursorY);
+    cursorY += 10;
+
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+    cursorY += 10;
+
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Participante: ${user.name}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`CPF: ${user.cpf || 'Não informado'}`, margin, cursorY);
+    cursorY += 7;
+    doc.text(`Data do Aceite: ${new Date(user.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
+    cursorY += 7;
+    
+    const productLabel = "Produtos/Cotas: ";
+    const splitProducts = doc.splitTextToSize(quotasStr, pageWidth - (margin * 2) - 35);
+    doc.text(productLabel, margin, cursorY);
+    doc.text(splitProducts, margin + 35, cursorY);
+    
+    doc.save(`meu_termo_assinado.pdf`);
+  };
+
   return (
     <div className="space-y-8">
-      <header>
-        <h2 className="text-3xl font-bold tracking-tight">Minhas Cotas</h2>
-        <p className="text-black/50">Lista de cotas adquiridas por você</p>
+      <header className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Minhas Cotas</h2>
+          <p className="text-black/50">Lista de cotas adquiridas por você</p>
+        </div>
+        {user.signed_term_at && (
+          <button 
+            onClick={downloadMyTerm}
+            className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-2xl font-bold hover:scale-105 transition-all"
+          >
+            <FileText size={20} /> Baixar Termo Assinado
+          </button>
+        )}
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -4393,7 +4554,33 @@ function MyPayments() {
     if (!tenantId || !user) return;
     const q = query(collection(db, 'tenants', tenantId, 'installments'), where('owner_id', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setInstallments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      // Group by due date and status
+      const groups: { [key: string]: any } = {};
+      all.forEach((inst: any) => {
+        const key = `${inst.due_date}_${inst.status}`;
+        if (!groups[key]) {
+          groups[key] = {
+            due_date: inst.due_date,
+            status: inst.status,
+            productName: inst.product_name,
+            amount: 0,
+            quotaNumbers: [],
+            paid_at: inst.paid_at
+          };
+        }
+        groups[key].amount += inst.amount;
+        if (inst.quota_number && !groups[key].quotaNumbers.includes(inst.quota_number)) {
+          groups[key].quotaNumbers.push(inst.quota_number);
+        }
+      });
+
+      const sorted = Object.values(groups).sort((a: any, b: any) => 
+        new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+      );
+
+      setInstallments(sorted);
     }, (err) => {
       console.error("Error in MyPayments listener:", err);
       handleFirestoreError(err, OperationType.LIST, `tenants/${tenantId}/installments`);
@@ -4537,10 +4724,10 @@ function MyPayments() {
               <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
                 <td className="p-6">
                   <p className="font-bold">{inst.productName}</p>
-                  <p className="text-xs text-black/40">Cotas: {inst.quotaNumbers}</p>
+                  <p className="text-xs text-black/40">Cotas: {inst.quotaNumbers.join(', ')}</p>
                 </td>
                 <td className="p-6 font-mono text-sm">
-                  {new Date(inst.due_date).toLocaleDateString('pt-BR')}
+                  {new Date(inst.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
                 </td>
                 <td className={cn(
                   "p-6 font-bold",
@@ -4581,23 +4768,54 @@ function PaymentManagement() {
     if (!tenantId) return;
     const q = query(collection(db, 'tenants', tenantId, 'installments'), where('status', '==', 'pending'));
     return onSnapshot(q, (snapshot) => {
-      setPending(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const allPending = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      // Group by user and due date
+      const groups: { [key: string]: any } = {};
+      allPending.forEach((inst: any) => {
+        const key = `${inst.owner_id}_${inst.due_date}`;
+        if (!groups[key]) {
+          groups[key] = {
+            owner_id: inst.owner_id,
+            owner_name: inst.owner_name || 'Desconhecido',
+            due_date: inst.due_date,
+            product_name: inst.product_name,
+            amount: 0,
+            quota_numbers: [],
+            ids: []
+          };
+        }
+        groups[key].amount += inst.amount;
+        groups[key].quota_numbers.push(inst.quota_number);
+        groups[key].ids.push(inst.id);
+      });
+
+      const sortedGroups = Object.values(groups).sort((a: any, b: any) => 
+        new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+      );
+
+      setPending(sortedGroups);
     });
   }, [tenantId]);
 
-  const handleMarkAsPaid = async (id: string) => {
+  const handleMarkAsPaid = async (ids: string[]) => {
     if (!tenantId) return;
-    if (!confirm('Deseja confirmar o recebimento desta parcela?')) return;
+    if (!confirm(`Deseja confirmar o recebimento destas ${ids.length} parcelas?`)) return;
     
     try {
-      await updateDoc(doc(db, 'tenants', tenantId, 'installments', id), {
-        status: 'paid',
-        paid_at: new Date().toISOString()
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      ids.forEach(id => {
+        batch.update(doc(db, 'tenants', tenantId, 'installments', id), {
+          status: 'paid',
+          paid_at: now
+        });
       });
-      alert('Pagamento confirmado com sucesso!');
+      await batch.commit();
+      alert('Pagamentos confirmados com sucesso!');
     } catch (err) {
       console.error(err);
-      alert('Erro ao confirmar pagamento');
+      alert('Erro ao confirmar pagamentos');
     }
   };
 
@@ -4610,40 +4828,40 @@ function PaymentManagement() {
 
       <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-black/5 flex justify-between items-center">
-          <h3 className="font-bold text-xl">Parcelas Pendentes</h3>
+          <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas por Data)</h3>
           <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">
-            {pending.length} Aguardando
+            {pending.length} Grupos
           </span>
         </div>
         <table className="w-full text-left">
           <thead>
             <tr className="border-b border-black/5 bg-black/[0.02]">
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cota</th>
+              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cotas</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR</th>
+              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR TOTAL</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40 text-right">Ação</th>
             </tr>
           </thead>
           <tbody>
-            {pending.map(inst => (
-              <tr key={inst.id} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
+            {pending.map((group, idx) => (
+              <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
                 <td className="p-6">
-                  <p className="font-bold">{inst.userName}</p>
+                  <p className="font-bold">{group.owner_name}</p>
                 </td>
                 <td className="p-6">
-                  <p className="font-medium text-sm">{inst.productName}</p>
-                  <p className="text-[10px] text-black/40">Cotas: {inst.quotaNumbers}</p>
+                  <p className="font-medium text-sm">{group.product_name}</p>
+                  <p className="text-[10px] text-black/40">Cotas: {group.quota_numbers.join(', ')}</p>
                 </td>
                 <td className="p-6 font-mono text-sm">
-                  {new Date(inst.due_date).toLocaleDateString('pt-BR')}
+                  {new Date(group.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
                 </td>
                 <td className="p-6 font-bold text-emerald-600">
-                  {inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  {group.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </td>
                 <td className="p-6 text-right">
                   <button 
-                    onClick={() => handleMarkAsPaid(inst.id)}
+                    onClick={() => handleMarkAsPaid(group.ids)}
                     className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold hover:scale-105 transition-all"
                   >
                     Confirmar Recebimento
