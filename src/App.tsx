@@ -3380,6 +3380,8 @@ function ClientsList() {
       getDocs(termsQuery).then(snapshot => {
         if (!snapshot.empty) {
           setTermContent(snapshot.docs[0].data().content);
+        } else {
+          setTermContent('Termos padrão do sistema...');
         }
       });
     }
@@ -3787,9 +3789,13 @@ function TermsPage() {
   const [term, setTerm] = useState<{ id: string, content: string } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId) {
+      setLoading(false);
+      return;
+    }
     const termsRef = collection(db, 'tenants', tenantId, 'terms');
     const q = query(termsRef, where('is_active', '==', true), limit(1));
     getDocs(q).then(snapshot => {
@@ -3797,7 +3803,14 @@ function TermsPage() {
         const data = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as any;
         setTerm(data);
         setContent(data.content);
+      } else {
+        setTerm(null);
+        setContent('Termos padrão do sistema...');
       }
+      setLoading(false);
+    }).catch(err => {
+      console.error(err);
+      setLoading(false);
     });
   }, [tenantId]);
 
@@ -3806,12 +3819,14 @@ function TermsPage() {
     try {
       if (term) {
         await updateDoc(doc(db, 'tenants', tenantId, 'terms', term.id), { content });
+        setTerm({ ...term, content });
       } else {
-        await addDoc(collection(db, 'tenants', tenantId, 'terms'), {
+        const docRef = await addDoc(collection(db, 'tenants', tenantId, 'terms'), {
           content,
           is_active: true,
           created_at: serverTimestamp()
         });
+        setTerm({ id: docRef.id, content });
       }
       setIsEditing(false);
       alert('Termo atualizado com sucesso!');
@@ -3918,7 +3933,14 @@ function TermsPage() {
     }
   };
 
-  if (!term) return <div>Carregando...</div>;
+  if (loading) return (
+    <div className="flex items-center justify-center p-20">
+      <RefreshCw className="w-8 h-8 animate-spin text-black/20" />
+      <span className="ml-3 text-black/40 font-medium">Carregando termos...</span>
+    </div>
+  );
+
+  const displayContent = term ? term.content : content;
 
   return (
     <div className="space-y-8">
@@ -3932,27 +3954,43 @@ function TermsPage() {
             onClick={() => setIsEditing(!isEditing)}
             className="px-6 py-3 bg-black text-white rounded-2xl font-bold"
           >
-            {isEditing ? 'Cancelar' : 'Editar Termo'}
+            {isEditing ? 'Cancelar' : (term ? 'Editar Termo' : 'Criar Termo')}
           </button>
         )}
       </header>
 
       <div className="bg-white rounded-3xl p-10 border border-black/5 shadow-sm space-y-8">
-        {isEditing ? (
+        {isEditing || !term ? (
           <div className="space-y-6">
-            <textarea 
-              className="w-full h-[500px] p-8 bg-black/5 rounded-3xl border-none focus:ring-0 font-serif text-lg leading-relaxed"
-              value={content}
-              onChange={e => setContent(e.target.value)}
-            />
-            <div className="flex justify-end">
-              <button onClick={handleSave} className="px-10 py-4 bg-emerald-600 text-white rounded-2xl font-bold">Salvar e Ativar</button>
-            </div>
+            {!term && !isEditing && user?.role === 'admin' && (
+              <div className="p-6 bg-amber-50 text-amber-700 rounded-2xl border border-amber-100 text-sm">
+                Nenhum termo configurado para esta loja. Use o editor abaixo para criar o primeiro termo.
+              </div>
+            )}
+            {(isEditing || (!term && user?.role === 'admin')) ? (
+              <>
+                <textarea 
+                  className="w-full h-[500px] p-8 bg-black/5 rounded-3xl border-none focus:ring-0 font-serif text-lg leading-relaxed"
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  placeholder="Escreva aqui o conteúdo do termo de adesão..."
+                />
+                <div className="flex justify-end">
+                  <button onClick={handleSave} className="px-10 py-4 bg-emerald-600 text-white rounded-2xl font-bold">
+                    {term ? 'Salvar e Ativar' : 'Criar e Ativar'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="text-center p-20 text-black/40 italic">
+                Nenhum termo de adesão configurado pelo administrador.
+              </div>
+            )}
           </div>
         ) : (
           <div className="space-y-10">
             <div className="prose prose-lg max-w-none font-serif text-lg leading-relaxed whitespace-pre-wrap">
-              {term.content}
+              {displayContent}
             </div>
             
             <div className="pt-10 border-t border-black/5 flex flex-col items-center gap-6">
