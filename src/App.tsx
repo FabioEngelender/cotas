@@ -2688,7 +2688,7 @@ function ProductDetail() {
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [termContent, setTermContent] = useState('');
   const [managers, setManagers] = useState<User[]>([]);
-  const { user, tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId, setUser } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
 
   const getMaxInstallments = () => {
