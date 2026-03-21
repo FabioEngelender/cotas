@@ -151,21 +151,27 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubUser: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       const currentTenantId = tenantId || localStorage.getItem('tenantId');
       
+      if (unsubUser) {
+        unsubUser();
+        unsubUser = null;
+      }
+
       if (firebaseUser) {
         console.log("Auth state changed: User logged in", firebaseUser.email);
         testConnection();
 
         if (currentTenantId) {
-          try {
-            const userDocRef = doc(db, 'tenants', currentTenantId, 'users', firebaseUser.uid);
-            const userDoc = await getDoc(userDocRef);
-            
-            if (userDoc.exists()) {
-              setUser({ id: firebaseUser.uid, ...userDoc.data() });
-            } else if (firebaseUser.email === "gamerengelender@gmail.com") {
+          const userDocRef = doc(db, 'tenants', currentTenantId, 'users', firebaseUser.uid);
+          
+          unsubUser = onSnapshot(userDocRef, async (snapshot) => {
+            if (snapshot.exists()) {
+              setUser({ id: firebaseUser.uid, ...snapshot.data() });
+            } else if (firebaseUser.email === ADMIN_MASTER_EMAIL) {
               // Auto-provision default admin if missing in this tenant
               const adminProfile = {
                 name: firebaseUser.displayName || 'Admin Master',
@@ -175,31 +181,32 @@ export default function App() {
                 created_at: serverTimestamp()
               };
               await setDoc(userDocRef, adminProfile);
-              setUser({ id: firebaseUser.uid, ...adminProfile });
-              console.log("Auto-provisioned admin profile for", firebaseUser.email);
+              // The snapshot listener will pick this up
             } else {
               console.log("User profile not found in tenant:", currentTenantId);
               setUser(null);
             }
-          } catch (err: any) {
-            console.error("Error fetching user profile:", err);
+            setIsAuthReady(true);
+          }, (err) => {
+            console.error("Error in user profile listener:", err);
             setUser(null);
-            if (err.code === 'permission-denied') {
-              // If we can't even read the user doc, something is wrong with permissions or tenant
-              console.warn("Permission denied reading user profile. Clearing tenant.");
-            }
-          }
+            setIsAuthReady(true);
+          });
         } else {
           setUser(null);
+          setIsAuthReady(true);
         }
       } else {
         console.log("Auth state changed: No user");
         setUser(null);
+        setIsAuthReady(true);
       }
-      setIsAuthReady(true);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      if (unsubUser) unsubUser();
+    };
   }, [tenantId]);
 
   useEffect(() => {
@@ -2070,15 +2077,15 @@ function Dashboard() {
     if (!tenantId) return;
 
     const productsRef = collection(db, 'tenants', tenantId, 'products');
-    const unsubProducts = onSnapshot(productsRef, (snapshot) => {
-      const productsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      
-      // Fetch all quotas for these products
-      const allQuotas: any[] = [];
-      const allInstallments: any[] = [];
-      
-      let processedProducts = 0;
-      if (productsData.length === 0) {
+    const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
+    const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+
+    let products: any[] = [];
+    let quotas: any[] = [];
+    let installments: any[] = [];
+
+    const updateStats = () => {
+      if (products.length === 0) {
         setStats({
           products: 0,
           sales: 0,
@@ -2091,48 +2098,67 @@ function Dashboard() {
         return;
       }
 
-      productsData.forEach(async (product: any) => {
-        const quotasRef = collection(db, 'tenants', tenantId, 'products', product.id, 'quotas');
-        const quotasSnap = await getDocs(quotasRef);
-        const productQuotas = quotasSnap.docs.map(d => ({ id: d.id, ...d.data(), productName: product.name }));
-        allQuotas.push(...productQuotas);
+      const soldQuotas = quotas.filter(q => q.status === 'sold');
+      const receivedPayments = installments
+        .filter(i => i.status === 'paid')
+        .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      const pendingPayments = installments
+        .filter(i => i.status === 'pending')
+        .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
-        for (const quota of productQuotas) {
-          const instRef = collection(db, 'tenants', tenantId, 'products', product.id, 'quotas', quota.id, 'installments');
-          const instSnap = await getDocs(instRef);
-          allInstallments.push(...instSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-        }
+      const productRevenue = products.map((p: any) => {
+        const pQuotas = soldQuotas.filter(q => q.product_id === p.id);
+        const pInstallments = installments.filter(i => i.product_id === p.id);
+        
+        const revenue = pInstallments
+          .filter(i => i.status === 'paid')
+          .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
-        processedProducts++;
-        if (processedProducts === productsData.length) {
-          // Calculate stats
-          const sales = allQuotas.filter(q => q.status === 'sold').length;
-          const receivedPayments = allInstallments
-            .filter(i => i.status === 'paid')
-            .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-          const pendingPayments = allInstallments
-            .filter(i => i.status === 'pending')
-            .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+        const sales_details = pQuotas.map(q => {
+          const qInstallments = pInstallments.filter(i => i.quota_id === q.id);
+          return {
+            id: q.id,
+            number: q.number,
+            owner: q.owner_name,
+            cpf: q.owner_cpf,
+            paid_installments: qInstallments.filter(i => i.status === 'paid').length,
+            total_installments: qInstallments.length
+          };
+        });
 
-          const productRevenue = productsData.map((p: any) => {
-            const pQuotas = allQuotas.filter(q => q.productId === p.id && q.status === 'sold');
-            const revenue = allInstallments
-              .filter(i => pQuotas.some(q => q.id === i.quotaId) && i.status === 'paid')
-              .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-            return { name: p.name, revenue };
-          });
-
-          setStats({
-            products: productsData.length,
-            sales,
-            revenue: receivedPayments,
-            pendingPayments,
-            receivedPayments,
-            productRevenue,
-            recentActivity: [] // Could be populated from audit logs if needed
-          });
-        }
+        return { 
+          id: p.id,
+          name: p.name, 
+          revenue, 
+          total_quotas: p.total_quotas,
+          sales_details 
+        };
       });
+
+      setStats({
+        products: products.length,
+        sales: soldQuotas.length,
+        revenue: receivedPayments,
+        pendingPayments,
+        receivedPayments,
+        productRevenue,
+        recentActivity: [] 
+      });
+    };
+
+    const unsubProducts = onSnapshot(productsRef, (snapshot) => {
+      products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      updateStats();
+    });
+
+    const unsubQuotas = onSnapshot(quotasRef, (snapshot) => {
+      quotas = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      updateStats();
+    });
+
+    const unsubInstallments = onSnapshot(installmentsRef, (snapshot) => {
+      installments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      updateStats();
     });
 
     const timer = setInterval(() => {
@@ -2141,6 +2167,8 @@ function Dashboard() {
 
     return () => {
       unsubProducts();
+      unsubQuotas();
+      unsubInstallments();
       clearInterval(timer);
     };
   }, [tenantId]);
@@ -2217,7 +2245,7 @@ function Dashboard() {
                 </tr>
               </thead>
               <tbody>
-                {selectedProduct.sales_details.map((sale: any, idx: number) => (
+                {(selectedProduct.sales_details || []).map((sale: any, idx: number) => (
                   <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.02] transition-all">
                     <td className="py-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
                     <td className="py-4 font-medium">{sale.owner}</td>
@@ -2233,7 +2261,7 @@ function Dashboard() {
                     </td>
                   </tr>
                 ))}
-                {selectedProduct.sales_details.length === 0 && (
+                {(selectedProduct.sales_details || []).length === 0 && (
                   <tr>
                     <td colSpan={2} className="py-12 text-center text-black/30">Nenhuma cota vendida para este produto ainda.</td>
                   </tr>
@@ -3673,7 +3701,9 @@ function ClientsList() {
     if (!client.signed_term_at) return alert('Este cliente ainda não assinou o termo.');
     
     const quotasStr = products.map((p: any) => {
-      const numbers = p.quotaNumbers ? p.quotaNumbers.split(',').map((n: string) => `#${n}`).join(', ') : '';
+      const numbers = Array.isArray(p.quotaNumbers) 
+        ? p.quotaNumbers.map((n: string) => `#${n}`).join(', ') 
+        : (p.quotaNumbers ? p.quotaNumbers.split(',').map((n: string) => `#${n}`).join(', ') : '');
       return `${p.quotaCount} cota(s) de ${p.name} (${numbers})`;
     }).join(', ');
 
