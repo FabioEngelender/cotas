@@ -3996,7 +3996,12 @@ function ClientsList() {
                   </div>
                   <div className="col-span-2">
                     <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Endereço</p>
-                    <p className="font-medium">{selectedUserDetails.user.address || '-'}</p>
+                    <p className="font-medium">
+                      {selectedUserDetails.user.address || '-'}
+                      {selectedUserDetails.user.address_number && `, Nº ${selectedUserDetails.user.address_number}`}
+                      {selectedUserDetails.user.address_complement && ` - ${selectedUserDetails.user.address_complement}`}
+                      {selectedUserDetails.user.address_cep && ` (CEP: ${selectedUserDetails.user.address_cep})`}
+                    </p>
                   </div>
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Chave PIX</p>
