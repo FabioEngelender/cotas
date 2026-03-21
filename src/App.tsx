@@ -1853,10 +1853,15 @@ function SettingsPage() {
     if (!tenantId || !user) return;
     setLoading(true);
     try {
-      // 1. Update general settings
-      await setDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), {
-        app_name: settings.app_name,
-        admin_name: settings.admin_name
+      // 1. Update general settings (for internal app use)
+      // Use updateDoc to avoid "undefined" errors and preserve other fields
+      await updateDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), {
+        app_name: settings.app_name
+      });
+
+      // 2. Update tenant name (this reflects on the "Bem-vindos" / Tenant Selection screen)
+      await updateDoc(doc(db, 'tenants', tenantId), {
+        name: settings.app_name
       });
 
       alert('Configurações salvas com sucesso!');
