@@ -76,7 +76,7 @@ const maskCEP = (value: string) => {
 };
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
 import { testConnection } from './firebaseService.js';
 
@@ -778,6 +778,30 @@ function Login() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    if (!email) {
+      setError('Por favor, digite seu e-mail para recuperar a senha.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      alert('E-mail de recuperação enviado! Verifique sua caixa de entrada.');
+    } catch (err: any) {
+      console.error(err);
+      let message = 'Erro ao enviar e-mail de recuperação.';
+      if (err.code === 'auth/user-not-found') {
+        message = 'E-mail não encontrado no sistema.';
+      } else if (err.code === 'auth/invalid-email') {
+        message = 'E-mail inválido.';
+      }
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <motion.div 
@@ -833,9 +857,18 @@ function Login() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40 mb-2 ml-1">
-                  Senha
-                </label>
+                <div className="flex justify-between items-center mb-2 ml-1">
+                  <label className="block text-xs font-bold uppercase tracking-widest text-[#141414]/40">
+                    Senha
+                  </label>
+                  <button 
+                    type="button"
+                    onClick={handleForgotPassword}
+                    className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40 hover:text-black transition-colors"
+                  >
+                    Esqueci minha senha
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={password}
@@ -1826,42 +1859,7 @@ function SettingsPage() {
         admin_name: settings.admin_name
       });
 
-      // 2. Update user profile in Firestore if name changed
-      if (settings.admin_name !== user.name) {
-        await updateDoc(doc(db, 'tenants', tenantId, 'users', user.id), {
-          name: settings.admin_name
-        });
-        // Update local user state
-        setUser({ ...user, name: settings.admin_name });
-        
-        // Update Auth profile name
-        if (auth.currentUser) {
-          await updateProfile(auth.currentUser, { displayName: settings.admin_name });
-        }
-      }
-
-      // 3. Update password if provided
-      if (settings.password && settings.password.length >= 6) {
-        if (auth.currentUser) {
-          try {
-            await updatePassword(auth.currentUser, settings.password);
-            alert('Configurações e senha atualizadas com sucesso!');
-          } catch (pwErr: any) {
-            if (pwErr.code === 'auth/requires-recent-login') {
-              alert('Para alterar a senha, você precisa ter feito login recentemente. Por favor, saia e entre novamente antes de tentar mudar a senha.');
-            } else {
-              throw pwErr;
-            }
-          }
-        }
-      } else if (settings.password && settings.password.length < 6) {
-        alert('A senha deve ter pelo menos 6 caracteres.');
-      } else {
-        alert('Configurações salvas com sucesso!');
-      }
-
-      // Clear password field after save
-      setSettings({ ...settings, password: '' });
+      alert('Configurações salvas com sucesso!');
     } catch (err: any) {
       console.error(err);
       alert('Erro ao salvar configurações: ' + err.message);
@@ -1970,25 +1968,6 @@ function SettingsPage() {
                 value={settings.app_name}
                 onChange={e => setSettings({...settings, app_name: e.target.value})}
                 className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Seu Nome (Administrador)</label>
-              <input 
-                type="text" 
-                value={settings.admin_name}
-                onChange={e => setSettings({...settings, admin_name: e.target.value})}
-                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Nova Senha (Opcional)</label>
-              <input 
-                type="password" 
-                value={settings.password || ''}
-                onChange={e => setSettings({...settings, password: e.target.value})}
-                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
-                placeholder="Deixe em branco para não alterar"
               />
             </div>
             <button 
