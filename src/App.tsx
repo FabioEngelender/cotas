@@ -76,7 +76,7 @@ const maskCEP = (value: string) => {
 };
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
 import { testConnection } from './firebaseService.js';
 
@@ -1817,14 +1817,54 @@ function SettingsPage() {
   }, [tenantId]);
 
   const handleSave = async () => {
-    if (!tenantId) return;
+    if (!tenantId || !user) return;
     setLoading(true);
     try {
-      await setDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), settings);
-      alert('Configurações salvas com sucesso!');
-    } catch (err) {
+      // 1. Update general settings
+      await setDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), {
+        app_name: settings.app_name,
+        admin_name: settings.admin_name
+      });
+
+      // 2. Update user profile in Firestore if name changed
+      if (settings.admin_name !== user.name) {
+        await updateDoc(doc(db, 'tenants', tenantId, 'users', user.id), {
+          name: settings.admin_name
+        });
+        // Update local user state
+        setUser({ ...user, name: settings.admin_name });
+        
+        // Update Auth profile name
+        if (auth.currentUser) {
+          await updateProfile(auth.currentUser, { displayName: settings.admin_name });
+        }
+      }
+
+      // 3. Update password if provided
+      if (settings.password && settings.password.length >= 6) {
+        if (auth.currentUser) {
+          try {
+            await updatePassword(auth.currentUser, settings.password);
+            alert('Configurações e senha atualizadas com sucesso!');
+          } catch (pwErr: any) {
+            if (pwErr.code === 'auth/requires-recent-login') {
+              alert('Para alterar a senha, você precisa ter feito login recentemente. Por favor, saia e entre novamente antes de tentar mudar a senha.');
+            } else {
+              throw pwErr;
+            }
+          }
+        }
+      } else if (settings.password && settings.password.length < 6) {
+        alert('A senha deve ter pelo menos 6 caracteres.');
+      } else {
+        alert('Configurações salvas com sucesso!');
+      }
+
+      // Clear password field after save
+      setSettings({ ...settings, password: '' });
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao salvar configurações');
+      alert('Erro ao salvar configurações: ' + err.message);
     } finally {
       setLoading(false);
     }
@@ -1929,49 +1969,35 @@ function SettingsPage() {
                 type="text" 
                 value={settings.app_name}
                 onChange={e => setSettings({...settings, app_name: e.target.value})}
-                readOnly={user?.email === ADMIN_MASTER_EMAIL}
-                className={cn(
-                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
-                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
-                )}
+                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
               />
             </div>
             <div>
-              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Nome do Administrador Master</label>
+              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Seu Nome (Administrador)</label>
               <input 
                 type="text" 
                 value={settings.admin_name}
                 onChange={e => setSettings({...settings, admin_name: e.target.value})}
-                readOnly={user?.email === ADMIN_MASTER_EMAIL}
-                className={cn(
-                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
-                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
-                )}
+                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
               />
             </div>
             <div>
-              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Nova Senha do Admin (Opcional)</label>
+              <label className="text-xs font-bold uppercase tracking-widest opacity-50">Nova Senha (Opcional)</label>
               <input 
                 type="password" 
                 value={settings.password || ''}
                 onChange={e => setSettings({...settings, password: e.target.value})}
-                readOnly={user?.email === ADMIN_MASTER_EMAIL}
-                className={cn(
-                  "w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all",
-                  user?.email === ADMIN_MASTER_EMAIL && "opacity-50 cursor-not-allowed"
-                )}
-                placeholder={user?.email === ADMIN_MASTER_EMAIL ? "Apenas o admin da loja pode alterar" : "Deixe em branco para não alterar"}
+                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
+                placeholder="Deixe em branco para não alterar"
               />
             </div>
-            {user?.email !== ADMIN_MASTER_EMAIL && (
-              <button 
-                onClick={handleSave}
-                disabled={loading}
-                className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50"
-              >
-                {loading ? 'Salvando...' : 'Salvar Alterações'}
-              </button>
-            )}
+            <button 
+              onClick={handleSave}
+              disabled={loading}
+              className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50"
+            >
+              {loading ? 'Salvando...' : 'Salvar Alterações'}
+            </button>
           </div>
         </div>
 
@@ -2002,6 +2028,20 @@ function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {user?.email === ADMIN_MASTER_EMAIL && (
+          <div className="bg-amber-50 p-8 rounded-[40px] border border-amber-200 shadow-sm space-y-4 md:col-span-2">
+            <div className="flex items-center gap-3 text-amber-800">
+              <Shield size={24} />
+              <h3 className="font-bold text-xl">Dica do Administrador Master: Reuso de E-mails</h3>
+            </div>
+            <p className="text-sm text-amber-900/70 leading-relaxed">
+              Para reutilizar e-mails de testes em novas lojas, você deve excluí-los manualmente no <strong>Console do Firebase &gt; Autenticação</strong>. 
+              Ao excluir uma loja pelo sistema, os dados do banco (Firestore) são apagados, mas as contas de login permanecem no Firebase por segurança. 
+              Excluir a conta no console liberará o e-mail para um novo cadastro.
+            </p>
+          </div>
+        )}
 
         {user?.tenant_id === 1 && (
           <div className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6">
