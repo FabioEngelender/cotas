@@ -918,8 +918,13 @@ function RegisterClient() {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      const firebaseUser = userCredential.user;
+      let firebaseUser;
+      if (auth.currentUser && auth.currentUser.email === formData.email) {
+        firebaseUser = auth.currentUser;
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        firebaseUser = userCredential.user;
+      }
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -1317,8 +1322,13 @@ function RegisterManager() {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      const firebaseUser = userCredential.user;
+      let firebaseUser;
+      if (auth.currentUser && auth.currentUser.email === formData.email) {
+        firebaseUser = auth.currentUser;
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        firebaseUser = userCredential.user;
+      }
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
         name: formData.name,
@@ -1443,8 +1453,13 @@ function Register() {
     setLoading(true);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      const firebaseUser = userCredential.user;
+      let firebaseUser;
+      if (auth.currentUser && auth.currentUser.email === formData.email) {
+        firebaseUser = auth.currentUser;
+      } else {
+        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+        firebaseUser = userCredential.user;
+      }
 
       await setDoc(doc(db, 'tenants', tenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -2214,33 +2229,53 @@ function ProductsList() {
     return () => unsubscribe && unsubscribe();
   }, [tenantId]);
 
+  const [creating, setCreating] = useState(false);
+  const [creationProgress, setCreationProgress] = useState(0);
+
   const handleCreateProduct = async () => {
     if (!newProduct.name || !newProduct.total_quotas || !newProduct.quota_price || !newProduct.expiration_month || !tenantId) {
       alert('Por favor, preencha todos os campos obrigatórios.');
       return;
     }
 
+    setCreating(true);
+    setCreationProgress(0);
+
     try {
+      const totalQuotas = Number(newProduct.total_quotas);
       const productData = {
         ...newProduct,
-        total_quotas: Number(newProduct.total_quotas),
+        total_quotas: totalQuotas,
         quota_price: Number(newProduct.quota_price),
         created_at: new Date().toISOString(),
         sold_quotas: 0,
-        available_quotas: Number(newProduct.total_quotas)
+        available_quotas: totalQuotas
       };
 
       const productRef = await addDoc(collection(db, 'tenants', tenantId, 'products'), productData);
       
-      // Create quotas
+      // Create quotas in batches of 500
       const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
-      for (let i = 1; i <= productData.total_quotas; i++) {
-        await addDoc(quotasRef, {
-          product_id: productRef.id,
-          number: i.toString().padStart(3, '0'),
-          status: 'available',
-          price: productData.quota_price
-        });
+      const batchSize = 500;
+      const numBatches = Math.ceil(totalQuotas / batchSize);
+
+      for (let b = 0; b < numBatches; b++) {
+        const batch = writeBatch(db);
+        const start = b * batchSize + 1;
+        const end = Math.min((b + 1) * batchSize, totalQuotas);
+
+        for (let i = start; i <= end; i++) {
+          const quotaRef = doc(quotasRef);
+          batch.set(quotaRef, {
+            product_id: productRef.id,
+            number: i.toString().padStart(3, '0'),
+            status: 'available',
+            price: productData.quota_price
+          });
+        }
+        
+        await batch.commit();
+        setCreationProgress(Math.round((end / totalQuotas) * 100));
       }
 
       setShowCreate(false);
@@ -2256,6 +2291,9 @@ function ProductsList() {
     } catch (err) {
       console.error(err);
       alert('Erro ao criar produto no Firebase');
+    } finally {
+      setCreating(false);
+      setCreationProgress(0);
     }
   };
 
@@ -2449,9 +2487,15 @@ function ProductsList() {
 
                 <button 
                   onClick={handleCreateProduct}
-                  className="w-full py-4 bg-black text-white rounded-2xl font-bold mt-4"
+                  disabled={creating}
+                  className="w-full py-4 bg-black text-white rounded-2xl font-bold mt-4 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  Criar Produto
+                  {creating ? (
+                    <>
+                      <RefreshCw size={20} className="animate-spin" />
+                      Criando Cotas... {creationProgress}%
+                    </>
+                  ) : 'Criar Produto'}
                 </button>
               </div>
             </motion.div>
@@ -2503,7 +2547,7 @@ function ProductDetail() {
 
     // Fetch quotas
     const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
-    const q = query(quotasRef, where('product_id', '==', id));
+    const q = query(quotasRef, where('product_id', '==', id), orderBy('number', 'asc'));
     const unsubscribeQuotas = onSnapshot(q, (snapshot) => {
       const quotasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quota));
       setQuotas(quotasData);
@@ -2535,6 +2579,8 @@ function ProductDetail() {
     };
   }, [id, tenantId]);
 
+  const [isPurchasing, setIsPurchasing] = useState(false);
+
   const handleBuy = async () => {
     if (selectedQuotas.length === 0) return;
     setAgreedToTerms(false);
@@ -2547,60 +2593,81 @@ function ProductDetail() {
   const confirmPurchase = async () => {
     if (!agreedToTerms || !tenantId || !user || !product) return alert('Você precisa aceitar os termos para continuar.');
 
+    setIsPurchasing(true);
     try {
       const now = new Date();
       
-      for (const qId of selectedQuotas) {
-        const quota = quotas.find(q => q.id === qId);
-        if (!quota || quota.status !== 'available') continue;
+      // Process in batches of 50 (each quota can have many installments)
+      const batchSize = 25; // Safer size considering installments
+      const numBatches = Math.ceil(selectedQuotas.length / batchSize);
 
-        // Update quota
-        await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
-          owner_id: user.id,
-          owner_name: user.name,
-          owner_cpf: user.cpf || '',
-          status: 'sold'
-        });
+      for (let b = 0; b < numBatches; b++) {
+        const batch = writeBatch(db);
+        const start = b * batchSize;
+        const end = Math.min((b + 1) * batchSize, selectedQuotas.length);
+        const currentBatchQuotas = selectedQuotas.slice(start, end);
 
-        // Create installments
-        const amountPerInstallment = quota.price / installmentCount;
-        
-        for (let i = 1; i <= installmentCount; i++) {
-          const dueDate = new Date();
-          const productCreatedAt = new Date(product.created_at);
-          const firstDueDate = new Date(productCreatedAt.getTime() + 24 * 60 * 60 * 1000);
-          
-          if (i === 1) {
-            dueDate.setTime(Math.max(now.getTime() + 24 * 60 * 60 * 1000, firstDueDate.getTime()));
-          } else {
-            dueDate.setMonth(dueDate.getMonth() + i - 1);
-          }
+        for (const qId of currentBatchQuotas) {
+          const quota = quotas.find(q => q.id === qId);
+          if (!quota || quota.status !== 'available') continue;
 
-          await addDoc(collection(db, 'tenants', tenantId, 'installments'), {
-            quota_id: qId,
-            product_id: product.id,
-            product_name: product.name,
+          // Update quota
+          const quotaRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+          batch.update(quotaRef, {
             owner_id: user.id,
-            amount: amountPerInstallment,
-            due_date: dueDate.toISOString().split('T')[0],
-            status: 'pending',
+            owner_name: user.name,
+            owner_cpf: user.cpf || '',
+            status: 'sold'
+          });
+
+          // Create installments
+          const amountPerInstallment = quota.price / installmentCount;
+          
+          for (let i = 1; i <= installmentCount; i++) {
+            const dueDate = new Date();
+            const productCreatedAt = new Date(product.created_at);
+            const firstDueDate = new Date(productCreatedAt.getTime() + 24 * 60 * 60 * 1000);
+            
+            if (i === 1) {
+              dueDate.setTime(Math.max(now.getTime() + 24 * 60 * 60 * 1000, firstDueDate.getTime()));
+            } else {
+              dueDate.setMonth(dueDate.getMonth() + i - 1);
+            }
+
+            const installmentRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+            batch.set(installmentRef, {
+              quota_id: qId,
+              product_id: product.id,
+              product_name: product.name,
+              owner_id: user.id,
+              amount: amountPerInstallment,
+              due_date: dueDate.toISOString().split('T')[0],
+              status: 'pending',
+              createdAt: serverTimestamp()
+            });
+          }
+        }
+
+        // Log audit (only in the first batch to avoid duplicates)
+        if (b === 0) {
+          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+          batch.set(auditRef, {
+            user_id: user.id,
+            action: 'COMPRA_COTA',
+            details: `Comprou ${selectedQuotas.length} cotas do produto ${product.name}`,
             createdAt: serverTimestamp()
           });
         }
-      }
 
-      // Log audit
-      await addDoc(collection(db, 'tenants', tenantId, 'audit_logs'), {
-        user_id: user.id,
-        action: 'COMPRA_COTA',
-        details: `Comprou ${selectedQuotas.length} cotas do produto ${product.name}`,
-        createdAt: serverTimestamp()
-      });
+        await batch.commit();
+      }
 
       setPurchaseSuccess(true);
     } catch (err) {
       console.error(err);
       alert('Erro ao processar compra no Firebase');
+    } finally {
+      setIsPurchasing(false);
     }
   };
 
@@ -3168,10 +3235,15 @@ function ProductDetail() {
 
                         <button 
                           onClick={confirmPurchase}
-                          disabled={!agreedToTerms}
-                          className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50 disabled:hover:scale-100"
+                          disabled={!agreedToTerms || isPurchasing}
+                          className="w-full py-4 bg-black text-white rounded-2xl font-bold hover:scale-[1.02] transition-all disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2"
                         >
-                          Finalizar Compra
+                          {isPurchasing ? (
+                            <>
+                              <RefreshCw size={20} className="animate-spin" />
+                              Processando...
+                            </>
+                          ) : 'Finalizar Compra'}
                         </button>
                       </div>
                     </>
@@ -4066,7 +4138,11 @@ function MyQuotas() {
 
   useEffect(() => {
     if (!tenantId || !user) return;
-    const q = query(collection(db, 'tenants', tenantId, 'quotas'), where('owner_id', '==', user.id));
+    const q = query(
+      collection(db, 'tenants', tenantId, 'quotas'), 
+      where('owner_id', '==', user.id),
+      orderBy('number', 'asc')
+    );
     return onSnapshot(q, (snapshot) => {
       setQuotas(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     });
