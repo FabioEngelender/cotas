@@ -34,7 +34,8 @@ import {
   Check,
   Share,
   UserPlus,
-  Clover
+  Clover,
+  Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -76,7 +77,7 @@ const maskCEP = (value: string) => {
 
 import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -919,12 +920,40 @@ function RegisterClient() {
 
     try {
       let firebaseUser;
-      if (auth.currentUser && auth.currentUser.email === formData.email) {
+      
+      // Check if email is already in this tenant's users
+      const tenantUsersRef = collection(db, 'tenants', inviteTenantId, 'users');
+      const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
+      const emailSnap = await getDocs(emailQuery);
+      
+      if (!emailSnap.empty) {
+        setError('E-mail já cadastrado nesta loja.');
+        setLoading(false);
+        return;
+      }
+
+      if (auth.currentUser && auth.currentUser.email === formData.email.toLowerCase()) {
         firebaseUser = auth.currentUser;
       } else {
-        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-        firebaseUser = userCredential.user;
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+          firebaseUser = userCredential.user;
+        } catch (authErr: any) {
+          if (authErr.code === 'auth/email-already-in-use') {
+            // User exists globally, try to sign in with provided password to verify ownership
+            try {
+              const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
+              firebaseUser = userCredential.user;
+            } catch (signInErr: any) {
+              throw new Error('Este e-mail já está em uso em outra loja. Por favor, use a mesma senha ou outro e-mail.');
+            }
+          } else {
+            throw authErr;
+          }
+        }
       }
+
+      if (!firebaseUser) throw new Error('Falha na autenticação.');
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -1186,6 +1215,14 @@ function RegisterTenant() {
           primary_color: '#141414',
           logo_url: formData.image_url
         });
+
+        // Create default term
+        const termRef = doc(collection(db, 'tenants', tenantRef.id, 'terms'));
+        await setDoc(termRef, {
+          content: 'Termo padrão de adesão. O administrador pode editar este conteúdo nas configurações.',
+          is_active: true,
+          created_at: serverTimestamp()
+        });
       } catch (err: any) {
         console.error("Operation failed:", err);
         handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantRef.id}`);
@@ -1224,12 +1261,30 @@ function RegisterTenant() {
             )}
             
             <div className="flex justify-center mb-4">
-              <div className="w-24 h-24 rounded-full bg-black/5 border border-dashed border-black/10 flex items-center justify-center overflow-hidden relative">
+              <div className="w-24 h-24 rounded-full bg-black/5 border border-dashed border-black/10 flex items-center justify-center overflow-hidden relative group">
                 {formData.image_url ? (
                   <img src={formData.image_url} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                 ) : (
                   <ImagePlus className="w-8 h-8 text-black/20" />
                 )}
+                <label className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                  <Camera className="text-white w-6 h-6" />
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                          setFormData({...formData, image_url: reader.result as string});
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                  />
+                </label>
               </div>
             </div>
 
@@ -1323,12 +1378,39 @@ function RegisterManager() {
 
     try {
       let firebaseUser;
-      if (auth.currentUser && auth.currentUser.email === formData.email) {
+      
+      // Check if email is already in this tenant's users
+      const tenantUsersRef = collection(db, 'tenants', inviteTenantId, 'users');
+      const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
+      const emailSnap = await getDocs(emailQuery);
+      
+      if (!emailSnap.empty) {
+        setError('E-mail já cadastrado nesta loja.');
+        setLoading(false);
+        return;
+      }
+
+      if (auth.currentUser && auth.currentUser.email === formData.email.toLowerCase()) {
         firebaseUser = auth.currentUser;
       } else {
-        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-        firebaseUser = userCredential.user;
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+          firebaseUser = userCredential.user;
+        } catch (authErr: any) {
+          if (authErr.code === 'auth/email-already-in-use') {
+            try {
+              const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
+              firebaseUser = userCredential.user;
+            } catch (signInErr: any) {
+              throw new Error('Este e-mail já está em uso em outra loja. Por favor, use a mesma senha ou outro e-mail.');
+            }
+          } else {
+            throw authErr;
+          }
+        }
       }
+
+      if (!firebaseUser) throw new Error('Falha na autenticação.');
 
       await setDoc(doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid), {
         name: formData.name,
@@ -1454,12 +1536,39 @@ function Register() {
 
     try {
       let firebaseUser;
-      if (auth.currentUser && auth.currentUser.email === formData.email) {
+      
+      // Check if email is already in this tenant's users
+      const tenantUsersRef = collection(db, 'tenants', tenantId, 'users');
+      const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
+      const emailSnap = await getDocs(emailQuery);
+      
+      if (!emailSnap.empty) {
+        setError('E-mail já cadastrado nesta loja.');
+        setLoading(false);
+        return;
+      }
+
+      if (auth.currentUser && auth.currentUser.email === formData.email.toLowerCase()) {
         firebaseUser = auth.currentUser;
       } else {
-        const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-        firebaseUser = userCredential.user;
+        try {
+          const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
+          firebaseUser = userCredential.user;
+        } catch (authErr: any) {
+          if (authErr.code === 'auth/email-already-in-use') {
+            try {
+              const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
+              firebaseUser = userCredential.user;
+            } catch (signInErr: any) {
+              throw new Error('Este e-mail já está em uso em outra loja. Por favor, use a mesma senha ou outro e-mail.');
+            }
+          } else {
+            throw authErr;
+          }
+        }
       }
+
+      if (!firebaseUser) throw new Error('Falha na autenticação.');
 
       await setDoc(doc(db, 'tenants', tenantId, 'users', firebaseUser.uid), {
         ...formData,
@@ -1673,7 +1782,8 @@ function SettingsPage() {
   const [newTenant, setNewTenant] = useState({ name: '', cnpj: '', image_url: '' });
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [tenants, setTenants] = useState<any[]>([]);
-  const { user, tenantId } = React.useContext(AuthContext)!;
+  const { user, setUser, tenantId } = React.useContext(AuthContext)!;
+  const navigate = useNavigate();
 
   const fetchTenants = () => {
     // Only super admin can see all tenants. For now, let's say if tenantId is 'main' or similar.
@@ -1737,15 +1847,40 @@ function SettingsPage() {
   };
 
   const handleDeleteTenant = async (id: string, name: string) => {
-    if (!confirm(`TEM CERTEZA que deseja excluir a loja "${name}"? Todos os dados serão permanentemente apagados.`)) return;
+    if (!confirm(`TEM CERTEZA que deseja excluir a loja "${name}"? Todos os dados (produtos, clientes, cotas) serão permanentemente apagados.`)) return;
     
     try {
+      const collectionsToDelete = [
+        'users',
+        'products',
+        'quotas',
+        'installments',
+        'terms',
+        'audit_logs',
+        'settings'
+      ];
+
+      for (const collName of collectionsToDelete) {
+        const collRef = collection(db, 'tenants', id, collName);
+        const snapshot = await getDocs(collRef);
+        const batch = writeBatch(db);
+        snapshot.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+
       await deleteDoc(doc(db, 'tenants', id));
       alert('Loja excluída com sucesso!');
     } catch (err: any) {
       console.error(err);
-      alert('Erro ao excluir loja');
+      alert('Erro ao excluir loja: ' + err.message);
     }
+  };
+
+  const deleteCurrentTenant = async () => {
+    if (!tenantId || !settings.app_name) return;
+    await handleDeleteTenant(tenantId, settings.app_name);
+    setUser(null);
+    navigate('/');
   };
 
   const handleExport = async () => {
@@ -1758,9 +1893,20 @@ function SettingsPage() {
 
   return (
     <div className="space-y-8 max-w-4xl">
-      <header>
-        <h2 className="text-3xl font-bold tracking-tight">Configurações</h2>
-        <p className="text-black/50">Gerencie a identidade e dados do sistema</p>
+      <header className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Configurações</h2>
+          <p className="text-black/50">Gerencie a identidade e dados do sistema</p>
+        </div>
+        {user?.role === 'admin' && (
+          <button 
+            onClick={deleteCurrentTenant}
+            className="px-6 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-bold hover:bg-red-100 transition-colors flex items-center gap-2"
+          >
+            <Trash2 size={16} />
+            Excluir Loja
+          </button>
+        )}
       </header>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -2221,6 +2367,9 @@ function ProductsList() {
     return onSnapshot(q, (snapshot) => {
       const productsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
       setProducts(productsData);
+    }, (err) => {
+      console.error("Error in Products listener:", err);
+      handleFirestoreError(err, OperationType.LIST, `tenants/${tenantId}/products`);
     });
   };
 
@@ -2268,9 +2417,10 @@ function ProductsList() {
           const quotaRef = doc(quotasRef);
           batch.set(quotaRef, {
             product_id: productRef.id,
-            number: i.toString().padStart(3, '0'),
+            number: i.toString().padStart(4, '0'),
             status: 'available',
-            price: productData.quota_price
+            price: productData.quota_price,
+            created_at: new Date().toISOString()
           });
         }
         
@@ -2355,6 +2505,11 @@ function ProductsList() {
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <Package size={40} className="text-black/10" />
+                  </div>
+                )}
+                {product.available_quotas === 0 && (
+                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
+                    <span className="px-6 py-2 bg-white text-black rounded-full font-bold text-sm tracking-widest uppercase">Esgotado</span>
                   </div>
                 )}
                 <div className="absolute top-4 right-4 px-3 py-1 bg-white/90 backdrop-blur rounded-full text-[10px] font-bold uppercase tracking-widest">
@@ -2617,7 +2772,8 @@ function ProductDetail() {
             owner_id: user.id,
             owner_name: user.name,
             owner_cpf: user.cpf || '',
-            status: 'sold'
+            status: 'sold',
+            sold_at: now.toISOString()
           });
 
           // Create installments
@@ -2648,8 +2804,15 @@ function ProductDetail() {
           }
         }
 
-        // Log audit (only in the first batch to avoid duplicates)
+        // Update product counts (only in the first batch)
         if (b === 0) {
+          const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+          batch.update(productRef, {
+            sold_quotas: increment(selectedQuotas.length),
+            available_quotas: increment(-selectedQuotas.length)
+          });
+
+          // Log audit
           const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
           batch.set(auditRef, {
             user_id: user.id,
@@ -3870,20 +4033,21 @@ function TermsPage() {
     }
     const termsRef = collection(db, 'tenants', tenantId, 'terms');
     const q = query(termsRef, where('is_active', '==', true), limit(1));
-    getDocs(q).then(snapshot => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const data = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as any;
         setTerm(data);
         setContent(data.content);
       } else {
         setTerm(null);
-        setContent('Termos padrão do sistema...');
+        setContent('Termo padrão de adesão. O administrador pode editar este conteúdo nas configurações.');
       }
       setLoading(false);
-    }).catch(err => {
-      console.error(err);
+    }, (err) => {
+      console.error("Error in Terms listener:", err);
       setLoading(false);
     });
+    return () => unsubscribe();
   }, [tenantId]);
 
   const handleSave = async () => {
@@ -4143,9 +4307,30 @@ function MyQuotas() {
       where('owner_id', '==', user.id),
       orderBy('number', 'asc')
     );
-    return onSnapshot(q, (snapshot) => {
-      setQuotas(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      // Fetch product details for each quota to get image and name
+      const productsRef = collection(db, 'tenants', tenantId, 'products');
+      const enrichedQuotas = await Promise.all(quotasData.map(async (quota: any) => {
+        const productSnap = await getDoc(doc(productsRef, quota.product_id));
+        if (productSnap.exists()) {
+          const pData = productSnap.data();
+          return {
+            ...quota,
+            productName: pData.name,
+            productImage: pData.image_url
+          };
+        }
+        return quota;
+      }));
+      
+      setQuotas(enrichedQuotas);
+    }, (err) => {
+      console.error("Error in MyQuotas listener:", err);
+      handleFirestoreError(err, OperationType.LIST, `tenants/${tenantId}/quotas`);
     });
+    return () => unsubscribe();
   }, [tenantId, user]);
 
   return (
@@ -4207,9 +4392,13 @@ function MyPayments() {
   useEffect(() => {
     if (!tenantId || !user) return;
     const q = query(collection(db, 'tenants', tenantId, 'installments'), where('owner_id', '==', user.id));
-    return onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       setInstallments(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (err) => {
+      console.error("Error in MyPayments listener:", err);
+      handleFirestoreError(err, OperationType.LIST, `tenants/${tenantId}/installments`);
     });
+    return () => unsubscribe();
   }, [tenantId, user]);
 
   const downloadPaymentReceipt = (group: any) => {
