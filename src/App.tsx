@@ -2871,6 +2871,7 @@ function ProductDetail() {
             owner_id: user.id,
             owner_name: user.name,
             owner_cpf: user.cpf || '',
+            product_name: product.name,
             status: 'sold',
             sold_at: now.toISOString()
           });
@@ -2897,6 +2898,7 @@ function ProductDetail() {
               product_name: product.name,
               owner_id: user.id,
               owner_name: user.name,
+              owner_cpf: user.cpf || '',
               amount: amountPerInstallment,
               due_date: dueDate.toISOString().split('T')[0],
               status: 'pending',
@@ -3411,7 +3413,8 @@ function ProductDetail() {
                         <button 
                           onClick={() => {
                             setShowBuyModal(false);
-                            window.location.reload();
+                            setPurchaseSuccess(false);
+                            navigate('/payments');
                           }}
                           className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
                         >
@@ -3846,10 +3849,24 @@ function ClientsList() {
 
         // Group quotas by product
         const productGroups: { [key: string]: any } = {};
-        quotas.forEach((q: any) => {
+        for (const q of quotas as any[]) {
           if (!productGroups[q.product_id]) {
+            let pName = q.product_name || 'Produto';
+            
+            // If name is missing, try to fetch from products collection
+            if (pName === 'Produto') {
+              try {
+                const pDoc = await getDoc(doc(db, 'tenants', tenantId, 'products', q.product_id));
+                if (pDoc.exists()) {
+                  pName = pDoc.data().name;
+                }
+              } catch (e) {
+                console.error("Error fetching product name:", e);
+              }
+            }
+
             productGroups[q.product_id] = {
-              name: q.productName || 'Produto',
+              name: pName,
               quotaCount: 0,
               quotaNumbers: [],
               pendingValue: 0
@@ -3857,7 +3874,7 @@ function ClientsList() {
           }
           productGroups[q.product_id].quotaCount++;
           productGroups[q.product_id].quotaNumbers.push(q.number);
-        });
+        }
 
         // Add pending values from installments
         installments.forEach((inst: any) => {
@@ -3938,8 +3955,8 @@ function ClientsList() {
         </div>
       </div>
 
-      <div className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-hidden">
-        <table className="w-full text-left">
+      <div className="bg-white rounded-3xl border border-black/5 shadow-sm overflow-x-auto">
+        <table className="w-full text-left min-w-[800px]">
           <thead className="bg-black/5 text-[10px] font-bold uppercase tracking-widest opacity-50">
             <tr>
               <th className="p-6">Nome</th>
@@ -4708,7 +4725,7 @@ function MyPayments({ settings }: { settings: any }) {
     doc.setFont("helvetica", "normal");
     doc.text(`Participante: ${user?.name}`, margin, cursorY);
     cursorY += 6;
-    doc.text(`CPF: ${group.items[0].owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
+    doc.text(`CPF: ${group.items[0]?.owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
     cursorY += 6;
     doc.text(`Data do Pagamento: ${new Date(group.paidAt).toLocaleDateString('pt-BR')} ${new Date(group.paidAt).toLocaleTimeString('pt-BR')}`, margin, cursorY);
     cursorY += 15;
@@ -4722,7 +4739,7 @@ function MyPayments({ settings }: { settings: any }) {
     group.items.forEach((inst: any) => {
       if (!productGroups[inst.product_id]) {
         productGroups[inst.product_id] = {
-          name: inst.productName,
+          name: inst.product_name || 'Produto',
           unitPrice: inst.amount,
           quantity: 0,
           quotas: [],
