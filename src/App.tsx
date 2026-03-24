@@ -476,7 +476,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
           <Route path="/terms" element={<TermsPage />} />
           <Route path="/audit" element={<AuditLogs />} />
           <Route path="/my-quotas" element={<MyQuotas />} />
-          <Route path="/my-payments" element={<MyPayments />} />
+          <Route path="/my-payments" element={<MyPayments settings={settings} />} />
           <Route path="/payments" element={<PaymentManagement />} />
           <Route path="/register" element={<Register />} />
           <Route path="/settings" element={<SettingsPage />} />
@@ -1856,12 +1856,14 @@ function SettingsPage() {
       // 1. Update general settings (for internal app use)
       // Use updateDoc to avoid "undefined" errors and preserve other fields
       await updateDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), {
-        app_name: settings.app_name
+        app_name: settings.app_name,
+        image_url: settings.image_url || ''
       });
 
-      // 2. Update tenant name (this reflects on the "Bem-vindos" / Tenant Selection screen)
+      // 2. Update tenant name and image (this reflects on the "Bem-vindos" / Tenant Selection screen)
       await updateDoc(doc(db, 'tenants', tenantId), {
-        name: settings.app_name
+        name: settings.app_name,
+        image_url: settings.image_url || ''
       });
 
       alert('Configurações salvas com sucesso!');
@@ -1870,6 +1872,17 @@ function SettingsPage() {
       alert('Erro ao salvar configurações: ' + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSettings({ ...settings, image_url: reader.result as string });
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -1966,6 +1979,24 @@ function SettingsPage() {
           <h3 className="font-bold text-xl">Identidade</h3>
           
           <div className="space-y-4">
+            <div className="flex items-center gap-6 p-4 bg-black/5 rounded-2xl">
+              <div className="w-20 h-20 rounded-2xl bg-white border border-black/5 flex items-center justify-center overflow-hidden relative group">
+                {settings.image_url ? (
+                  <img src={settings.image_url} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <Clover size={32} className="opacity-20" />
+                )}
+                <label className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer text-white">
+                  <Camera size={20} />
+                  <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
+                </label>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold">Logo da Loja</p>
+                <p className="text-xs text-black/40">Clique na imagem para alterar o logo</p>
+              </div>
+            </div>
+
             <div>
               <label className="text-xs font-bold uppercase tracking-widest opacity-50">Nome da Loja</label>
               <input 
@@ -2888,7 +2919,6 @@ function ProductDetail() {
           batch.update(userRef, {
             signed_term_at: signedAt
           });
-          setUser({ ...user, signed_term_at: signedAt });
 
           // Create signature record
           const signatureRef = doc(collection(db, 'tenants', tenantId, 'signatures'));
@@ -4605,7 +4635,7 @@ function MyQuotas() {
   );
 }
 
-function MyPayments() {
+function MyPayments({ settings }: { settings: any }) {
   const [installments, setInstallments] = useState<any[]>([]);
   const { user, tenantId } = React.useContext(AuthContext)!;
 
@@ -4653,7 +4683,8 @@ function MyPayments() {
     const margin = 14;
     let cursorY = 20;
 
-    doc.setFontSize(16);
+    // Header
+    doc.setFontSize(18);
     doc.setFont("helvetica", "bold");
     doc.text("COMPROVANTE DE PAGAMENTO CONSOLIDADO", pageWidth / 2, cursorY, { align: 'center' });
     cursorY += 10;
@@ -4662,52 +4693,95 @@ function MyPayments() {
     doc.setTextColor(255, 0, 0);
     doc.text("SEM VALOR FISCAL", pageWidth / 2, cursorY, { align: 'center' });
     doc.setTextColor(0, 0, 0);
-    cursorY += 20;
+    cursorY += 15;
 
-    doc.setFontSize(11);
+    // Store Info (if available)
+    if (settings.app_name) {
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text(settings.app_name, margin, cursorY);
+      cursorY += 10;
+    }
+
+    // User Info
+    doc.setFontSize(10);
     doc.setFont("helvetica", "normal");
     doc.text(`Participante: ${user?.name}`, margin, cursorY);
-    cursorY += 7;
+    cursorY += 6;
     doc.text(`CPF: ${group.items[0].owner_cpf || user?.cpf || 'Não informado'}`, margin, cursorY);
+    cursorY += 6;
+    doc.text(`Data do Pagamento: ${new Date(group.paidAt).toLocaleDateString('pt-BR')} ${new Date(group.paidAt).toLocaleTimeString('pt-BR')}`, margin, cursorY);
     cursorY += 15;
 
-    doc.setFont("helvetica", "bold");
-    doc.text("DETALHES DOS PAGAMENTOS", margin, cursorY);
-    cursorY += 10;
-    
-    group.items.forEach((inst: any, idx: number) => {
-      if (cursorY > 250) {
-        doc.addPage();
-        cursorY = 20;
-      }
-      
-      doc.setFont("helvetica", "bold");
-      doc.text(`${idx + 1}. Produto: ${inst.productName}`, margin, cursorY);
-      cursorY += 7;
-      doc.setFont("helvetica", "normal");
-      
-      const quotaLabel = "Cotas: ";
-      const splitQuotas = doc.splitTextToSize(String(inst.quotaNumbers), pageWidth - (margin * 2) - 15);
-      doc.text(quotaLabel, margin, cursorY);
-      doc.text(splitQuotas, margin + 15, cursorY);
-      cursorY += (splitQuotas.length * 5) + 2;
+    // Table Header
+    const tableColumn = ["Produto", "V. Unit", "Qtd", "Cotas", "Vencimento", "V. Total"];
+    const tableRows: any[] = [];
 
-      doc.text(`VALOR INDIVIDUAL: ${inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
-      cursorY += 7;
-      doc.text(`Vencimento: ${new Date(inst.due_date).toLocaleDateString('pt-BR')}`, margin, cursorY);
-      cursorY += 10;
+    // Group items by product to show consolidated info per product
+    const productGroups: { [key: string]: any } = {};
+    group.items.forEach((inst: any) => {
+      if (!productGroups[inst.product_id]) {
+        productGroups[inst.product_id] = {
+          name: inst.productName,
+          unitPrice: inst.amount,
+          quantity: 0,
+          quotas: [],
+          dueDate: inst.due_date,
+          total: 0
+        };
+      }
+      productGroups[inst.product_id].quantity += 1;
+      productGroups[inst.product_id].total += inst.amount;
+      if (inst.quota_number && !productGroups[inst.product_id].quotas.includes(inst.quota_number)) {
+        productGroups[inst.product_id].quotas.push(inst.quota_number);
+      }
     });
 
+    Object.values(productGroups).forEach((p: any) => {
+      tableRows.push([
+        p.name,
+        p.unitPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+        p.quantity,
+        p.quotas.sort((a: any, b: any) => Number(a) - Number(b)).join(', '),
+        new Date(p.dueDate + 'T12:00:00').toLocaleDateString('pt-BR'),
+        p.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+      ]);
+    });
+
+    (doc as any).autoTable({
+      head: [tableColumn],
+      body: tableRows,
+      startY: cursorY,
+      theme: 'grid',
+      headStyles: { fillColor: [20, 20, 20], textColor: [255, 255, 255], fontStyle: 'bold' },
+      styles: { fontSize: 8, cellPadding: 3 },
+      columnStyles: {
+        0: { cellWidth: 50 },
+        1: { halign: 'right' },
+        2: { halign: 'center' },
+        3: { cellWidth: 40 },
+        4: { halign: 'center' },
+        5: { halign: 'right', fontStyle: 'bold' }
+      }
+    });
+
+    cursorY = (doc as any).lastAutoTable.finalY + 15;
+
+    // Summary
+    doc.setFontSize(12);
     doc.setFont("helvetica", "bold");
-    doc.text(`VALOR TOTAL PAGO: ${group.totalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
-    cursorY += 10;
-    doc.setFont("helvetica", "normal");
-    doc.text(`Data de Pagamento: ${new Date(group.paidAt).toLocaleDateString('pt-BR')}`, margin, cursorY);
+    doc.text(`VALOR TOTAL PAGO: ${group.totalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, pageWidth - margin, cursorY, { align: 'right' });
     cursorY += 15;
 
-    doc.setFontSize(10);
-    doc.text(`Autenticação: ${user?.id}-${Date.now()}`, margin, cursorY);
-    
+    // Authentication
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(100, 100, 100);
+    const authCode = `${user?.id?.substring(0, 8)}-${group.paidAt.replace(/[^0-9]/g, '').substring(0, 12)}-${Date.now().toString().substring(8)}`;
+    doc.text(`Autenticação Digital: ${authCode}`, margin, cursorY);
+    cursorY += 5;
+    doc.text(`Este documento é um comprovante de quitação de parcelas gerado pelo sistema ${settings.app_name}.`, margin, cursorY);
+
     doc.save(`comprovante_consolidado_${group.paidAt.split('T')[0]}.pdf`);
   };
 
