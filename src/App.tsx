@@ -78,7 +78,7 @@ const maskCEP = (value: string) => {
 import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -3714,47 +3714,38 @@ function ProductChat() {
       const storageRef = ref(storage, `tenants/${tenantId}/products/${id}/chat/${fileName}`);
       
       console.log("Iniciando upload para:", storageRef.fullPath);
-      const uploadTask = uploadBytesResumable(storageRef, file);
+      const snapshot = await uploadBytes(storageRef, file);
+      console.log("Upload concluído, snapshot:", snapshot.metadata.fullPath);
+      
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      console.log("URL de download obtida:", downloadURL);
 
-      uploadTask.on('state_changed', 
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          console.log('Upload is ' + progress + '% done');
-        }, 
-        (error) => {
-          console.error("Erro no upload (task):", error);
-          alert(`Erro ao enviar arquivo: ${error.message}`);
-          setUploading(false);
-        }, 
-        async () => {
-          try {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            console.log("Upload concluído, URL:", downloadURL);
-
-            const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
-            await addDoc(chatRef, {
-              userId: user.id,
-              userName: user.name,
-              message: `Enviou um arquivo: ${file.name}`,
-              fileUrl: downloadURL,
-              fileName: file.name,
-              fileType: file.type,
-              fileSize: file.size,
-              isManagerUpload: user.role === 'admin' || user.role === 'manager',
-              created_at: serverTimestamp()
-            });
-            setUploading(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
-          } catch (err: any) {
-            console.error("Erro ao salvar mensagem do chat:", err);
-            alert(`Erro ao salvar mensagem: ${err.message}`);
-            setUploading(false);
-          }
-        }
-      );
+      const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
+      await addDoc(chatRef, {
+        userId: user.id,
+        userName: user.name,
+        message: `Enviou um arquivo: ${file.name}`,
+        fileUrl: downloadURL,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        isManagerUpload: user.role === 'admin' || user.role === 'manager',
+        created_at: serverTimestamp()
+      });
+      
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err: any) {
-      console.error("Erro no upload (catch):", err);
-      alert(`Erro ao enviar arquivo: ${err.message || 'Erro desconhecido'}`);
+      console.error("Erro no upload:", err);
+      let errorMessage = "Erro desconhecido";
+      if (err.code === 'storage/retry-limit-exceeded') {
+        errorMessage = "Limite de tentativas excedido. Verifique se o serviço de Storage está ativo no seu Firebase Console.";
+      } else if (err.code === 'storage/unauthorized') {
+        errorMessage = "Sem permissão para fazer upload. Verifique as regras de segurança do Storage.";
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      alert(`Erro ao enviar arquivo: ${errorMessage}`);
+    } finally {
       setUploading(false);
     }
   };
