@@ -3694,7 +3694,12 @@ function ProductChat() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !tenantId || !id || !user) return;
+    if (!file) return;
+    
+    if (!tenantId || !id || !user) {
+      alert('Sessão inválida. Por favor, recarregue a página.');
+      return;
+    }
 
     // 10MB limit
     if (file.size > 10 * 1024 * 1024) {
@@ -3708,7 +3713,10 @@ function ProductChat() {
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
       const storageRef = ref(storage, `tenants/${tenantId}/products/${id}/chat/${fileName}`);
       
-      await uploadBytes(storageRef, file);
+      console.log("Iniciando upload para:", storageRef.fullPath);
+      const uploadResult = await uploadBytes(storageRef, file);
+      console.log("Upload concluído:", uploadResult.metadata.fullPath);
+      
       const downloadURL = await getDownloadURL(storageRef);
 
       const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
@@ -3723,9 +3731,9 @@ function ProductChat() {
         isManagerUpload: user.role === 'admin' || user.role === 'manager',
         created_at: serverTimestamp()
       });
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao enviar arquivo.');
+    } catch (err: any) {
+      console.error("Erro no upload:", err);
+      alert(`Erro ao enviar arquivo: ${err.message || 'Erro desconhecido'}`);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -4380,76 +4388,96 @@ function TermsPage() {
       const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
       const q = query(quotasRef, where('owner_id', '==', user.id));
       const snapshot = await getDocs(q);
-      const myQuotas = snapshot.docs.map(d => d.data());
+      const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       
-      const quotasStr = myQuotas.map((q: any) => `Cota ${q.number}`).join(', ');
+      const productsRef = collection(db, 'tenants', tenantId, 'products');
+      const enrichedQuotas = await Promise.all(quotasData.map(async (quota: any) => {
+        const productSnap = await getDoc(doc(productsRef, quota.product_id));
+        if (productSnap.exists()) {
+          const pData = productSnap.data();
+          return { ...quota, productName: pData.name };
+        }
+        return quota;
+      }));
 
-      const doc = new jsPDF();
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
+      const productGroups: { [key: string]: any } = {};
+      enrichedQuotas.forEach((q: any) => {
+        if (!productGroups[q.product_id]) {
+          productGroups[q.product_id] = { name: q.productName || 'Produto', numbers: [] };
+        }
+        productGroups[q.product_id].numbers.push(q.number);
+      });
+
+      const quotasStr = Object.values(productGroups).map((p: any) => 
+        `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')})`
+      ).join(', ');
+
+      const docPdf = new jsPDF();
+      const pageWidth = docPdf.internal.pageSize.getWidth();
+      const pageHeight = docPdf.internal.pageSize.getHeight();
       const margin = 14;
       let cursorY = 20;
 
-      doc.setFontSize(16);
-      doc.setFont("helvetica", "bold");
-      doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+      docPdf.setFontSize(16);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
       cursorY += 10;
 
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
-      doc.setTextColor(50, 50, 50);
-      const splitTerm = doc.splitTextToSize(content, pageWidth - (margin * 2));
+      docPdf.setFontSize(9);
+      docPdf.setFont("helvetica", "normal");
+      docPdf.setTextColor(50, 50, 50);
+      const splitTerm = docPdf.splitTextToSize(content, pageWidth - (margin * 2));
       
       for (let i = 0; i < splitTerm.length; i++) {
         if (cursorY > pageHeight - 40) {
-          doc.addPage();
+          docPdf.addPage();
           cursorY = 20;
         }
-        doc.text(splitTerm[i], margin, cursorY);
+        docPdf.text(splitTerm[i], margin, cursorY);
         cursorY += 5;
       }
 
       cursorY += 10;
       if (cursorY > pageHeight - 60) {
-        doc.addPage();
+        docPdf.addPage();
         cursorY = 20;
       }
 
-      doc.setDrawColor(200, 200, 200);
-      doc.line(margin, cursorY, pageWidth - margin, cursorY);
+      docPdf.setDrawColor(200, 200, 200);
+      docPdf.line(margin, cursorY, pageWidth - margin, cursorY);
       cursorY += 10;
 
-      doc.setFontSize(14);
-      doc.setFont("helvetica", "bold");
-      doc.setTextColor(0, 0, 0);
-      doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+      docPdf.setFontSize(14);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.setTextColor(0, 0, 0);
+      docPdf.text("ASSINATURA ELETRÔNICA", margin, cursorY);
       cursorY += 10;
 
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "normal");
-      doc.text(`Participante: ${user?.name}`, margin, cursorY);
+      docPdf.setFontSize(11);
+      docPdf.setFont("helvetica", "normal");
+      docPdf.text(`Participante: ${user?.name}`, margin, cursorY);
       cursorY += 7;
-      doc.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
+      docPdf.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
       cursorY += 7;
-      doc.text(`Data do Aceite: ${new Date(user?.signed_term_at!).toLocaleString('pt-BR')}`, margin, cursorY);
+      docPdf.text(`Data do Aceite: ${new Date(user?.signed_term_at!).toLocaleString('pt-BR')}`, margin, cursorY);
       cursorY += 7;
       
       const productLabel = "Produtos/Cotas: ";
       const productValue = quotasStr || 'Nenhuma cota registrada no momento da assinatura.';
-      const splitProducts = doc.splitTextToSize(productValue, pageWidth - (margin * 2) - 35);
+      const splitProducts = docPdf.splitTextToSize(productValue, pageWidth - (margin * 2) - 35);
       
-      doc.text(productLabel, margin, cursorY);
-      doc.text(splitProducts, margin + 35, cursorY);
+      docPdf.text(productLabel, margin, cursorY);
+      docPdf.text(splitProducts, margin + 35, cursorY);
       cursorY += (splitProducts.length * 5) + 2;
 
       if (cursorY > pageHeight - 20) {
-        doc.addPage();
+        docPdf.addPage();
         cursorY = 20;
       }
 
-      doc.text(`Autenticação Digital ID: ${user?.id}-${new Date(user?.signed_term_at!).getTime()}`, margin, cursorY);
+      docPdf.text(`Autenticação Digital ID: ${user?.id}-${new Date(user?.signed_term_at!).getTime()}`, margin, cursorY);
       
-      doc.save(`termo_adesao_assinado.pdf`);
+      docPdf.save(`termo_adesao_assinado.pdf`);
     } catch (err) {
       console.error(err);
       alert('Erro ao gerar cópia do termo.');
