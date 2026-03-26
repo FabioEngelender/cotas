@@ -78,7 +78,7 @@ const maskCEP = (value: string) => {
 import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -3714,29 +3714,48 @@ function ProductChat() {
       const storageRef = ref(storage, `tenants/${tenantId}/products/${id}/chat/${fileName}`);
       
       console.log("Iniciando upload para:", storageRef.fullPath);
-      const uploadResult = await uploadBytes(storageRef, file);
-      console.log("Upload concluído:", uploadResult.metadata.fullPath);
-      
-      const downloadURL = await getDownloadURL(storageRef);
+      const uploadTask = uploadBytesResumable(storageRef, file);
 
-      const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
-      await addDoc(chatRef, {
-        userId: user.id,
-        userName: user.name,
-        message: `Enviou um arquivo: ${file.name}`,
-        fileUrl: downloadURL,
-        fileName: file.name,
-        fileType: file.type,
-        fileSize: file.size,
-        isManagerUpload: user.role === 'admin' || user.role === 'manager',
-        created_at: serverTimestamp()
-      });
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          console.log('Upload is ' + progress + '% done');
+        }, 
+        (error) => {
+          console.error("Erro no upload (task):", error);
+          alert(`Erro ao enviar arquivo: ${error.message}`);
+          setUploading(false);
+        }, 
+        async () => {
+          try {
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            console.log("Upload concluído, URL:", downloadURL);
+
+            const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
+            await addDoc(chatRef, {
+              userId: user.id,
+              userName: user.name,
+              message: `Enviou um arquivo: ${file.name}`,
+              fileUrl: downloadURL,
+              fileName: file.name,
+              fileType: file.type,
+              fileSize: file.size,
+              isManagerUpload: user.role === 'admin' || user.role === 'manager',
+              created_at: serverTimestamp()
+            });
+            setUploading(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          } catch (err: any) {
+            console.error("Erro ao salvar mensagem do chat:", err);
+            alert(`Erro ao salvar mensagem: ${err.message}`);
+            setUploading(false);
+          }
+        }
+      );
     } catch (err: any) {
-      console.error("Erro no upload:", err);
+      console.error("Erro no upload (catch):", err);
       alert(`Erro ao enviar arquivo: ${err.message || 'Erro desconhecido'}`);
-    } finally {
       setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -4408,9 +4427,9 @@ function TermsPage() {
         productGroups[q.product_id].numbers.push(q.number);
       });
 
-      const quotasStr = Object.values(productGroups).map((p: any) => 
-        `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')})`
-      ).join(', ');
+      const quotaLines = Object.values(productGroups).map((p: any) => 
+        `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')});`
+      );
 
       const docPdf = new jsPDF();
       const pageWidth = docPdf.internal.pageSize.getWidth();
@@ -4460,21 +4479,32 @@ function TermsPage() {
       docPdf.text(`CPF: ${user?.cpf || 'Não informado'}`, margin, cursorY);
       cursorY += 7;
       docPdf.text(`Data do Aceite: ${new Date(user?.signed_term_at!).toLocaleString('pt-BR')}`, margin, cursorY);
+      cursorY += 10;
+      
+      docPdf.setFontSize(11);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.text("Produtos/Cotas:", margin, cursorY);
       cursorY += 7;
-      
-      const productLabel = "Produtos/Cotas: ";
-      const productValue = quotasStr || 'Nenhuma cota registrada no momento da assinatura.';
-      const splitProducts = docPdf.splitTextToSize(productValue, pageWidth - (margin * 2) - 35);
-      
-      docPdf.text(productLabel, margin, cursorY);
-      docPdf.text(splitProducts, margin + 35, cursorY);
-      cursorY += (splitProducts.length * 5) + 2;
+
+      docPdf.setFontSize(10);
+      docPdf.setFont("helvetica", "normal");
+      quotaLines.forEach(line => {
+        if (cursorY > pageHeight - 20) {
+          docPdf.addPage();
+          cursorY = 20;
+        }
+        const splitLine = docPdf.splitTextToSize(line, pageWidth - (margin * 2));
+        docPdf.text(splitLine, margin, cursorY);
+        cursorY += (splitLine.length * 5);
+      });
 
       if (cursorY > pageHeight - 20) {
         docPdf.addPage();
         cursorY = 20;
       }
 
+      cursorY += 5;
+      docPdf.setFontSize(9);
       docPdf.text(`Autenticação Digital ID: ${user?.id}-${new Date(user?.signed_term_at!).getTime()}`, margin, cursorY);
       
       docPdf.save(`termo_adesao_assinado.pdf`);
@@ -4673,61 +4703,82 @@ function MyQuotas() {
       productGroups[q.product_id].numbers.push(q.number);
     });
 
-    const quotasStr = Object.values(productGroups).map((p: any) => 
-      `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')})`
-    ).join(', ');
+    const quotaLines = Object.values(productGroups).map((p: any) => 
+      `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')});`
+    );
 
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
+    const docPdf = new jsPDF();
+    const pageWidth = docPdf.internal.pageSize.getWidth();
+    const pageHeight = docPdf.internal.pageSize.getHeight();
     const margin = 14;
     let cursorY = 20;
 
-    doc.setFontSize(16);
-    doc.setFont("helvetica", "bold");
-    doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+    docPdf.setFontSize(16);
+    docPdf.setFont("helvetica", "bold");
+    docPdf.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
     cursorY += 10;
 
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(50, 50, 50);
-    const splitTerm = doc.splitTextToSize(termContent || 'Termos de adesão...', pageWidth - (margin * 2));
+    docPdf.setFontSize(9);
+    docPdf.setFont("helvetica", "normal");
+    docPdf.setTextColor(50, 50, 50);
+    const splitTerm = docPdf.splitTextToSize(termContent || 'Termos de adesão...', pageWidth - (margin * 2));
     
     for (let i = 0; i < splitTerm.length; i++) {
       if (cursorY > pageHeight - 40) {
-        doc.addPage();
+        docPdf.addPage();
         cursorY = 20;
       }
-      doc.text(splitTerm[i], margin, cursorY);
+      docPdf.text(splitTerm[i], margin, cursorY);
       cursorY += 5;
     }
 
     cursorY += 10;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, cursorY, pageWidth - margin, cursorY);
+    docPdf.setDrawColor(200, 200, 200);
+    docPdf.line(margin, cursorY, pageWidth - margin, cursorY);
     cursorY += 10;
 
-    doc.setFontSize(14);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(0, 0, 0);
-    doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+    docPdf.setFontSize(14);
+    docPdf.setFont("helvetica", "bold");
+    docPdf.setTextColor(0, 0, 0);
+    docPdf.text("ASSINATURA ELETRÔNICA", margin, cursorY);
     cursorY += 10;
 
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "normal");
-    doc.text(`Participante: ${user.name}`, margin, cursorY);
+    docPdf.setFontSize(11);
+    docPdf.setFont("helvetica", "normal");
+    docPdf.text(`Participante: ${user.name}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`CPF: ${user.cpf || 'Não informado'}`, margin, cursorY);
+    docPdf.text(`CPF: ${user.cpf || 'Não informado'}`, margin, cursorY);
     cursorY += 7;
-    doc.text(`Data do Aceite: ${new Date(user.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
-    cursorY += 7;
+    docPdf.text(`Data do Aceite: ${new Date(user.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
+    cursorY += 10;
     
-    const productLabel = "Produtos/Cotas: ";
-    const splitProducts = doc.splitTextToSize(quotasStr, pageWidth - (margin * 2) - 35);
-    doc.text(productLabel, margin, cursorY);
-    doc.text(splitProducts, margin + 35, cursorY);
+    docPdf.setFontSize(11);
+    docPdf.setFont("helvetica", "bold");
+    docPdf.text("Produtos/Cotas:", margin, cursorY);
+    cursorY += 7;
+
+    docPdf.setFontSize(10);
+    docPdf.setFont("helvetica", "normal");
+    quotaLines.forEach(line => {
+      if (cursorY > pageHeight - 20) {
+        docPdf.addPage();
+        cursorY = 20;
+      }
+      const splitLine = docPdf.splitTextToSize(line, pageWidth - (margin * 2));
+      docPdf.text(splitLine, margin, cursorY);
+      cursorY += (splitLine.length * 5);
+    });
+
+    if (cursorY > pageHeight - 20) {
+      docPdf.addPage();
+      cursorY = 20;
+    }
+
+    cursorY += 5;
+    docPdf.setFontSize(9);
+    docPdf.text(`Autenticação Digital ID: ${user.id}-${new Date(user.signed_term_at).getTime()}`, margin, cursorY);
     
-    doc.save(`meu_termo_assinado.pdf`);
+    docPdf.save(`meu_termo_assinado.pdf`);
   };
 
   return (
