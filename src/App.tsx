@@ -75,9 +75,10 @@ const maskCEP = (value: string) => {
     .replace(/(-\d{3})\d+?$/, '$1');
 };
 
-import { auth, db, handleFirestoreError, OperationType } from './firebase.js';
+import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -2216,6 +2217,21 @@ function Dashboard() {
       updateStats();
     });
 
+    const auditRef = collection(db, 'tenants', tenantId, 'audit_logs');
+    const auditQuery = query(auditRef, orderBy('created_at', 'desc'), limit(5));
+    const unsubAudit = onSnapshot(auditQuery, (snapshot) => {
+      const activities = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          title: data.user_name || 'Sistema',
+          details: data.details,
+          createdAt: data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
+        };
+      });
+      setStats((prev: any) => prev ? { ...prev, recentActivity: activities } : null);
+    });
+
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 1000);
@@ -2224,6 +2240,7 @@ function Dashboard() {
       unsubProducts();
       unsubQuotas();
       unsubInstallments();
+      unsubAudit();
       clearInterval(timer);
     };
   }, [tenantId]);
@@ -2363,17 +2380,17 @@ function Dashboard() {
             {(stats?.productRevenue || []).map((pr: any, i: number) => (
               <div 
                 key={i} 
-                className="bg-white p-8 rounded-3xl border border-black/5 shadow-sm space-y-4 hover:border-black/20 transition-all cursor-pointer group"
+                className="bg-white p-6 sm:p-8 rounded-3xl border border-black/5 shadow-sm space-y-4 hover:border-black/20 transition-all cursor-pointer group"
                 onClick={() => setSelectedProduct(pr)}
               >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-widest opacity-50 mb-1">{pr.name}</p>
-                    <p className="text-3xl font-bold tracking-tighter">{formatCurrency(pr.revenue)}</p>
+                <div className="flex justify-between items-start gap-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest opacity-50 mb-1 truncate">{pr.name}</p>
+                    <p className="text-2xl sm:text-3xl font-bold tracking-tighter break-words">{formatCurrency(pr.revenue)}</p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xs font-bold opacity-40 uppercase tracking-widest">Cotas Totais</p>
-                    <p className="text-xl font-bold">{pr.total_quotas}</p>
+                  <div className="text-right shrink-0">
+                    <p className="text-[10px] sm:text-xs font-bold opacity-40 uppercase tracking-widest">Cotas Totais</p>
+                    <p className="text-lg sm:text-xl font-bold">{pr.total_quotas}</p>
                   </div>
                 </div>
                 
@@ -2435,13 +2452,15 @@ function StatCard({ label, value, sub, onClick }: { label: string, value: string
     <div 
       onClick={onClick}
       className={cn(
-        "bg-white p-8 rounded-3xl border border-black/5 shadow-sm",
+        "bg-white p-6 sm:p-8 rounded-3xl border border-black/5 shadow-sm h-full flex flex-col justify-between",
         onClick && "cursor-pointer hover:bg-black/5 transition-all"
       )}
     >
-      <p className="text-xs font-bold uppercase tracking-widest opacity-50 mb-2">{label}</p>
-      <p className="text-4xl font-bold tracking-tighter mb-2">{value}</p>
-      <p className="text-xs text-emerald-600 font-medium">{sub}</p>
+      <div>
+        <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest opacity-50 mb-2 truncate">{label}</p>
+        <p className="text-2xl sm:text-4xl font-bold tracking-tighter mb-2 break-words leading-tight">{value}</p>
+      </div>
+      <p className="text-[10px] sm:text-xs text-emerald-600 font-medium truncate">{sub}</p>
     </div>
   );
 }
@@ -2940,9 +2959,10 @@ function ProductDetail() {
           const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
           batch.set(auditRef, {
             user_id: user.id,
+            user_name: user.name,
             action: 'COMPRA_COTA',
             details: `Comprou ${selectedQuotas.length} cotas do produto ${product.name}`,
-            createdAt: serverTimestamp()
+            created_at: serverTimestamp()
           });
         }
 
@@ -3414,7 +3434,7 @@ function ProductDetail() {
                           onClick={() => {
                             setShowBuyModal(false);
                             setPurchaseSuccess(false);
-                            navigate('/payments');
+                            navigate(user?.role === 'client' ? '/my-payments' : '/payments');
                           }}
                           className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
                         >
@@ -3626,6 +3646,8 @@ function ProductChat() {
   const { user, tenantId } = React.useContext(AuthContext)!;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [product, setProduct] = useState<Product | null>(null);
 
@@ -3670,6 +3692,53 @@ function ProductChat() {
     }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !tenantId || !id || !user) return;
+
+    // 10MB limit
+    if (file.size > 10 * 1024 * 1024) {
+      alert('O arquivo deve ter no máximo 10MB.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const storageRef = ref(storage, `tenants/${tenantId}/products/${id}/chat/${fileName}`);
+      
+      await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(storageRef);
+
+      const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
+      await addDoc(chatRef, {
+        userId: user.id,
+        userName: user.name,
+        message: `Enviou um arquivo: ${file.name}`,
+        fileUrl: downloadURL,
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size,
+        isManagerUpload: user.role === 'admin' || user.role === 'manager',
+        created_at: serverTimestamp()
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao enviar arquivo.');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const canDownload = (msg: any) => {
+    if (!user) return false;
+    if (user.role === 'admin' || user.role === 'manager') return true;
+    if (msg.isManagerUpload) return true;
+    return msg.userId === user.id;
+  };
+
   return (
     <div className="h-full flex flex-col bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
       <div className="p-6 border-b border-black/5 flex items-center justify-between">
@@ -3682,13 +3751,14 @@ function ProductChat() {
       </div>
 
       <div ref={scrollRef} className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#F9F9F7]">
-        {messages.map((msg, i) => {
+        {messages.map((msg: any, i) => {
           const isMentioned = msg.mentionUserId === user?.id;
+          const isOwn = msg.userId === user?.id;
           return (
-            <div key={i} className={cn("flex flex-col", msg.userName === user?.name.split(" ")[0] ? "items-end" : "items-start")}>
+            <div key={i} className={cn("flex flex-col", isOwn ? "items-end" : "items-start")}>
               <div className={cn(
                 "max-w-[70%] p-4 rounded-2xl shadow-sm relative",
-                msg.userName === user?.name.split(" ")[0] ? "bg-black text-white rounded-tr-none" : "bg-white text-black rounded-tl-none",
+                isOwn ? "bg-black text-white rounded-tr-none" : "bg-white text-black rounded-tl-none",
                 isMentioned && "ring-4 ring-amber-400"
               )}>
                 {isMentioned && (
@@ -3696,22 +3766,61 @@ function ProductChat() {
                     Direta
                   </div>
                 )}
-                <p className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-1">{msg.userName}</p>
+                <p className={cn("text-[10px] font-bold uppercase tracking-widest mb-1", isOwn ? "opacity-50" : "opacity-40")}>{msg.userName}</p>
                 <p className="text-sm">{msg.message}</p>
+                
+                {msg.fileUrl && (
+                  <div className="mt-3 pt-3 border-t border-white/10">
+                    {canDownload(msg) ? (
+                      <a 
+                        href={msg.fileUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className={cn(
+                          "flex items-center gap-2 p-2 rounded-xl transition-all text-xs font-bold",
+                          isOwn ? "bg-white/10 hover:bg-white/20 text-white" : "bg-black/5 hover:bg-black/10 text-black"
+                        )}
+                      >
+                        <FileDown size={16} />
+                        <span className="truncate max-w-[150px]">{msg.fileName}</span>
+                      </a>
+                    ) : (
+                      <div className="flex items-center gap-2 p-2 rounded-xl bg-black/5 text-black/40 text-[10px] italic">
+                        <Shield size={14} /> Arquivo restrito
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
       </div>
 
-      <form onSubmit={sendMessage} className="p-6 border-t border-black/5 flex gap-4">
+      <form onSubmit={sendMessage} className="p-6 border-t border-black/5 flex gap-4 items-center">
+        <input 
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileUpload}
+          className="hidden"
+          accept="image/*,.pdf"
+        />
+        <button 
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+          className="p-4 bg-black/5 text-black/60 rounded-2xl hover:bg-black/10 transition-all disabled:opacity-50"
+          title="Anexar arquivo (Foto ou PDF)"
+        >
+          {uploading ? <RefreshCw size={20} className="animate-spin" /> : <Plus size={20} />}
+        </button>
         <input 
           value={input}
           onChange={e => setInput(e.target.value)}
           className="flex-1 p-4 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
           placeholder="Digite sua mensagem..."
         />
-        <button className="px-8 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all">
+        <button className="px-8 py-4 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all">
           Enviar
         </button>
       </form>
@@ -4458,7 +4567,7 @@ function AuditLogs() {
               <div className="w-2 h-2 rounded-full bg-indigo-500" />
               <div>
                 <p className="font-bold">{log.action}</p>
-                <p className="text-xs text-black/40">{log.details} (por {log.userName || 'Sistema'})</p>
+                <p className="text-xs text-black/40">{log.details} (por {log.user_name || 'Sistema'})</p>
               </div>
             </div>
             <div className="text-right">
@@ -4482,10 +4591,10 @@ function MyQuotas() {
   useEffect(() => {
     if (!tenantId || !user) return;
     
-    // Fetch active term
+    // Fetch active term with real-time listener
     const termsRef = collection(db, 'tenants', tenantId, 'terms');
     const termsQuery = query(termsRef, where('is_active', '==', true), limit(1));
-    getDocs(termsQuery).then(snapshot => {
+    const unsubTerm = onSnapshot(termsQuery, (snapshot) => {
       if (!snapshot.empty) {
         setTermContent(snapshot.docs[0].data().content);
       }
@@ -4519,7 +4628,10 @@ function MyQuotas() {
       console.error("Error in MyQuotas listener:", err);
       handleFirestoreError(err, OperationType.LIST, `tenants/${tenantId}/quotas`);
     });
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      unsubTerm();
+    };
   }, [tenantId, user]);
 
   const downloadMyTerm = () => {
@@ -4859,8 +4971,8 @@ function MyPayments({ settings }: { settings: any }) {
         </div>
       )}
 
-      <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
-        <table className="w-full text-left">
+      <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
+        <table className="w-full text-left min-w-[800px]">
           <thead>
             <tr className="border-b border-black/5 bg-black/[0.02]">
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cota</th>
@@ -4912,7 +5024,9 @@ function MyPayments({ settings }: { settings: any }) {
 
 function PaymentManagement() {
   const [pending, setPending] = useState<any[]>([]);
-  const { tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId } = React.useContext(AuthContext)!;
+
+  if (user?.role === 'client') return <Navigate to="/my-payments" />;
 
   useEffect(() => {
     if (!tenantId) return;
@@ -4928,6 +5042,7 @@ function PaymentManagement() {
           groups[key] = {
             owner_id: inst.owner_id,
             owner_name: inst.owner_name || 'Desconhecido',
+            owner_cpf: inst.owner_cpf || 'Não informado',
             due_date: inst.due_date,
             product_name: inst.product_name,
             amount: 0,
@@ -4976,17 +5091,18 @@ function PaymentManagement() {
         <p className="text-black/50">Baixa manual de parcelas recebidas</p>
       </header>
 
-      <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-black/5 flex justify-between items-center">
+      <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
+        <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
           <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas por Data)</h3>
           <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">
             {pending.length} Grupos
           </span>
         </div>
-        <table className="w-full text-left">
+        <table className="w-full text-left min-w-[1000px]">
           <thead>
             <tr className="border-b border-black/5 bg-black/[0.02]">
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
+              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">CPF</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cotas</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
               <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR TOTAL</th>
@@ -4997,7 +5113,10 @@ function PaymentManagement() {
             {pending.map((group, idx) => (
               <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
                 <td className="p-6">
-                  <p className="font-bold">{group.owner_name}</p>
+                  <p className="font-bold whitespace-nowrap">{group.owner_name}</p>
+                </td>
+                <td className="p-6">
+                  <p className="font-mono text-sm whitespace-nowrap">{group.owner_cpf}</p>
                 </td>
                 <td className="p-6">
                   <p className="font-medium text-sm">{group.product_name}</p>
