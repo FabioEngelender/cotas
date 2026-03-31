@@ -3848,6 +3848,7 @@ function ProductChat() {
 
 function ClientsList() {
   const [clients, setClients] = useState<User[]>([]);
+  const [overdueUserIds, setOverdueUserIds] = useState<Set<string>>(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [selectedUserDetails, setSelectedUserDetails] = useState<any>(null);
   const [termContent, setTermContent] = useState('');
@@ -3862,6 +3863,23 @@ function ClientsList() {
       setClients(usersData);
     });
   };
+
+  useEffect(() => {
+    if (!tenantId) return;
+    const q = query(collection(db, 'tenants', tenantId, 'installments'), where('status', '==', 'pending'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const overdue = new Set<string>();
+      const todayStr = new Date().toISOString().split('T')[0];
+      snapshot.docs.forEach(doc => {
+        const data = doc.data();
+        if (data.due_date < todayStr && data.owner_id) {
+          overdue.add(data.owner_id);
+        }
+      });
+      setOverdueUserIds(overdue);
+    });
+    return () => unsubscribe();
+  }, [tenantId]);
 
   useEffect(() => {
     const unsubscribe = fetchUsers();
@@ -4051,8 +4069,11 @@ function ClientsList() {
 
   const sortedClients = [...clients].sort((a, b) => {
     // Prioritize overdue payments
-    if (a.has_overdue_payments !== b.has_overdue_payments) {
-      return a.has_overdue_payments ? -1 : 1;
+    const aOverdue = a.has_overdue_payments || overdueUserIds.has(a.id);
+    const bOverdue = b.has_overdue_payments || overdueUserIds.has(b.id);
+    
+    if (aOverdue !== bOverdue) {
+      return aOverdue ? -1 : 1;
     }
     const roleOrder: Record<string, number> = { admin: 1, manager: 2, client: 3 };
     if (roleOrder[a.role] !== roleOrder[b.role]) {
@@ -4115,13 +4136,13 @@ function ClientsList() {
                     <div className="flex items-center gap-2">
                       <div className={cn(
                         "w-3 h-3 rounded-full",
-                        client.has_overdue_payments ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
+                        (client.has_overdue_payments || overdueUserIds.has(client.id)) ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.5)]" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"
                       )} />
                       <span className={cn(
                         "text-[10px] font-bold uppercase tracking-widest",
-                        client.has_overdue_payments ? "text-red-600" : "text-emerald-600"
+                        (client.has_overdue_payments || overdueUserIds.has(client.id)) ? "text-red-600" : "text-emerald-600"
                       )}>
-                        {client.has_overdue_payments ? 'Atrasado' : 'Em dia'}
+                        {(client.has_overdue_payments || overdueUserIds.has(client.id)) ? 'EM ATRASO' : 'Em dia'}
                       </span>
                     </div>
                   ) : (
@@ -5070,9 +5091,10 @@ function MyPayments({ settings }: { settings: any }) {
                 <td className="p-6">
                   <span className={cn(
                     "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                    inst.status === 'paid' ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                    inst.status === 'paid' ? "bg-emerald-100 text-emerald-700" : 
+                    (new Date(inst.due_date + 'T23:59:59') < new Date() ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")
                   )}>
-                    {inst.status === 'paid' ? 'Pago' : 'Pendente'}
+                    {inst.status === 'paid' ? 'Pago' : (new Date(inst.due_date + 'T23:59:59') < new Date() ? 'EM ATRASO' : 'Pendente')}
                   </span>
                   {inst.paid_at && (
                     <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
@@ -5192,8 +5214,14 @@ function PaymentManagement() {
                   <p className="font-medium text-sm">{group.product_name}</p>
                   <p className="text-[10px] text-black/40">Cotas: {group.quota_numbers.join(', ')}</p>
                 </td>
-                <td className="p-6 font-mono text-sm">
+                <td className={cn(
+                  "p-6 font-mono text-sm",
+                  new Date(group.due_date + 'T23:59:59') < new Date() ? "text-red-600 font-bold" : ""
+                )}>
                   {new Date(group.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                  {new Date(group.due_date + 'T23:59:59') < new Date() && (
+                    <span className="block text-[10px] uppercase tracking-widest text-red-500 mt-1">Em Atraso</span>
+                  )}
                 </td>
                 <td className="p-6 font-bold text-emerald-600">
                   {group.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
