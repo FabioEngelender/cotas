@@ -743,6 +743,17 @@ function Login() {
     setLoading(true);
     try {
       await login();
+      // Log audit
+      if (tenantId && auth.currentUser) {
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        await setDoc(auditRef, {
+          user_id: auth.currentUser.uid,
+          user_name: auth.currentUser.displayName || auth.currentUser.email,
+          action: 'LOGIN_GOOGLE',
+          details: `Usuário ${auth.currentUser.email} entrou via Google`,
+          created_at: serverTimestamp()
+        });
+      }
     } catch (err: any) {
       if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
         return;
@@ -765,6 +776,17 @@ function Login() {
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
+      // Log audit
+      if (tenantId) {
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        await setDoc(auditRef, {
+          user_id: email,
+          user_name: email,
+          action: 'LOGIN',
+          details: `Usuário ${email} entrou no sistema`,
+          created_at: serverTimestamp()
+        });
+      }
     } catch (err: any) {
       console.error(err);
       let message = 'Erro ao entrar. Verifique seus dados.';
@@ -2521,6 +2543,16 @@ function ProductsList() {
 
       const productRef = await addDoc(collection(db, 'tenants', tenantId, 'products'), productData);
       
+      // Log audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'CRIAR_PRODUTO',
+        details: `Criou o produto ${newProduct.name} com ${newProduct.total_quotas} cotas`,
+        created_at: serverTimestamp()
+      });
+
       // Create quotas in batches of 500
       const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
       const batchSize = 500;
@@ -2584,6 +2616,17 @@ function ProductsList() {
 
     try {
       await deleteDoc(doc(db, 'tenants', tenantId, 'products', id));
+      
+      // Log audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'EXCLUIR_PRODUTO',
+        details: `Excluiu o produto ID: ${id}`,
+        created_at: serverTimestamp()
+      });
+
       // Note: In a real app, you'd also delete associated quotas and installments
       alert('Produto excluído com sucesso!');
     } catch (err) {
@@ -4043,11 +4086,23 @@ function ClientsList() {
   const handleCreateUser = async () => {
     if (!tenantId) return;
     try {
-      await setDoc(doc(db, 'tenants', tenantId, 'users', newUser.email), {
+      const userRef = doc(db, 'tenants', tenantId, 'users', newUser.email);
+      await setDoc(userRef, {
         ...newUser,
         tenant_id: tenantId,
         created_at: serverTimestamp()
       });
+
+      // Log audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'CRIAR_USUARIO',
+        details: `Criou o usuário ${newUser.name} (${newUser.email})`,
+        created_at: serverTimestamp()
+      });
+
       setShowCreate(false);
       setNewUser({ name: '', email: '', role: 'client', cpf: '', pix_key: '' });
     } catch (err) {
@@ -4061,6 +4116,16 @@ function ClientsList() {
     if (!confirm('Tem certeza que deseja excluir este usuário?')) return;
     try {
       await deleteDoc(doc(db, 'tenants', tenantId, 'users', id));
+      
+      // Log audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'EXCLUIR_USUARIO',
+        details: `Excluiu o usuário ID: ${id}`,
+        created_at: serverTimestamp()
+      });
     } catch (err) {
       console.error(err);
       alert('Erro ao excluir usuário');
@@ -4641,7 +4706,10 @@ function AuditLogs() {
               </div>
             </div>
             <div className="text-right">
-              <p className="text-xs font-mono text-black/40">{new Date(log.created_at).toLocaleString()}</p>
+              <p className="text-xs font-mono text-black/40">
+                {log.created_at?.toDate?.() ? log.created_at.toDate().toLocaleString('pt-BR') : 
+                 log.created_at ? new Date(log.created_at).toLocaleString('pt-BR') : 'N/A'}
+              </p>
             </div>
           </div>
         ))}
@@ -4857,6 +4925,7 @@ function MyQuotas() {
 
 function MyPayments({ settings }: { settings: any }) {
   const [installments, setInstallments] = useState<any[]>([]);
+  const [rawInstallments, setRawInstallments] = useState<any[]>([]);
   const { user, tenantId } = React.useContext(AuthContext)!;
 
   useEffect(() => {
@@ -4864,6 +4933,7 @@ function MyPayments({ settings }: { settings: any }) {
     const q = query(collection(db, 'tenants', tenantId, 'installments'), where('owner_id', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setRawInstallments(all);
       
       // Group by due date and status
       const groups: { [key: string]: any } = {};
@@ -5005,7 +5075,7 @@ function MyPayments({ settings }: { settings: any }) {
     doc.save(`comprovante_consolidado_${group.paidAt.split('T')[0]}.pdf`);
   };
 
-  const paidGroups = installments
+  const paidGroups = rawInstallments
     .filter(i => i.status === 'paid' && i.paid_at)
     .reduce((groups: any, inst) => {
       const date = inst.paid_at.split('T')[0];
@@ -5168,6 +5238,17 @@ function PaymentManagement() {
           paid_at: now
         });
       });
+
+      // Log audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'CONFIRMAR_PAGAMENTO',
+        details: `Confirmou o recebimento de ${ids.length} parcelas`,
+        created_at: serverTimestamp()
+      });
+
       await batch.commit();
       alert('Pagamentos confirmados com sucesso!');
     } catch (err) {
