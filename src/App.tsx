@@ -139,6 +139,7 @@ const AuthContext = React.createContext<{
   setUser: (user: any | null) => void;
   login: () => Promise<void>;
   logout: () => Promise<void>;
+  syncUserInstallments: (tenantId: string, userId: string) => Promise<void>;
 } | null>(null);
 
 // Firebase initialization is handled in firebase.ts
@@ -227,6 +228,79 @@ export default function App() {
     setTenantId(id);
   };
 
+  const syncUserInstallments = async (tenantId: string, userId: string) => {
+    try {
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const q = query(installmentsRef, where('owner_id', '==', userId));
+      const snapshot = await getDocs(q);
+      const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      
+      const today = new Date();
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth();
+      
+      const quotaGroups: { [key: string]: any[] } = {};
+      all.forEach((inst: any) => {
+        if (!quotaGroups[inst.quota_id]) quotaGroups[inst.quota_id] = [];
+        quotaGroups[inst.quota_id].push(inst);
+      });
+      
+      const batch = writeBatch(db);
+      let hasChanges = false;
+      
+      for (const qId in quotaGroups) {
+        const installments = quotaGroups[qId];
+        const pending = installments.filter(i => i.status === 'pending').sort((a, b) => a.due_date.localeCompare(b.due_date));
+        const paid = installments.filter(i => i.status === 'paid');
+        
+        if (pending.length === 0) continue;
+        
+        const firstPending = pending[0];
+        const firstPendingDate = new Date(firstPending.due_date + 'T12:00:00');
+        
+        if (firstPendingDate.getFullYear() < currentYear || (firstPendingDate.getFullYear() === currentYear && firstPendingDate.getMonth() < currentMonth)) {
+          hasChanges = true;
+          
+          const totalPaid = paid.reduce((sum, i) => sum + i.amount, 0);
+          const totalQuotaPrice = firstPending.total_quota_price || (firstPending.amount * (pending.length + paid.length));
+          const expirationDateStr = firstPending.expiration_date;
+          
+          if (!expirationDateStr) continue;
+          
+          const expDate = new Date(expirationDateStr + 'T12:00:00');
+          const diffMonths = (expDate.getFullYear() - currentYear) * 12 + (expDate.getMonth() - currentMonth);
+          const remainingMonths = Math.max(1, diffMonths + 1);
+          
+          const remainingBalance = totalQuotaPrice - totalPaid;
+          const newAmount = remainingBalance / remainingMonths;
+          
+          pending.forEach(i => {
+            batch.delete(doc(db, 'tenants', tenantId, 'installments', i.id));
+          });
+          
+          for (let i = 0; i < remainingMonths; i++) {
+            const dueDate = new Date(currentYear, currentMonth + i, expDate.getDate());
+            const newRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+            const { id, ...dataToCopy } = firstPending;
+            batch.set(newRef, {
+              ...dataToCopy,
+              amount: newAmount,
+              due_date: dueDate.toISOString().split('T')[0],
+              status: 'pending',
+              createdAt: serverTimestamp()
+            });
+          }
+        }
+      }
+      
+      if (hasChanges) {
+        await batch.commit();
+      }
+    } catch (err) {
+      console.error("Error syncing installments:", err);
+    }
+  };
+
   const login = async () => {
     const provider = new GoogleAuthProvider();
     try {
@@ -249,7 +323,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <AuthContext.Provider value={{ user, tenantId, setTenantId: handleSetTenantId, setUser, login, logout }}>
+      <AuthContext.Provider value={{ user, tenantId, setTenantId: handleSetTenantId, setUser, login, logout, syncUserInstallments }}>
         <Router>
           <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans" translate="no">
             <Routes>
@@ -2836,19 +2910,16 @@ function ProductDetail() {
   const { user, tenantId, setUser } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
 
-  const getMaxInstallments = () => {
-    if (!product) return 1;
+  const getDynamicInstallmentCount = () => {
+    if (!product || !product.expiration_month) return 1;
     if (product.payment_type === 'cash') return 1;
-    if (!product.expiration_month) return 12;
-
-    const expDate = new Date(product.expiration_month);
-    const now = new Date();
-    
-    const diffMonths = (expDate.getFullYear() - now.getFullYear()) * 12 + (expDate.getMonth() - now.getMonth());
+    const expDate = new Date(product.expiration_month + 'T12:00:00');
+    const startDate = new Date();
+    const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
     return Math.max(1, diffMonths + 1);
   };
 
-  const maxInstallments = getMaxInstallments();
+  const dynamicInstallmentCount = getDynamicInstallmentCount();
 
   useEffect(() => {
     if (!id || !tenantId) return;
@@ -2938,19 +3009,15 @@ function ProductDetail() {
             sold_at: now.toISOString()
           });
 
-          // Create installments
-          const amountPerInstallment = quota.price / installmentCount;
+          // Create installments based on dynamic logic
+          const expDate = new Date(product.expiration_month + 'T12:00:00');
+          const startDate = new Date();
+          const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
+          const count = Math.max(1, diffMonths + 1);
+          const amountPerInstallment = quota.price / count;
           
-          for (let i = 1; i <= installmentCount; i++) {
-            const dueDate = new Date();
-            const productCreatedAt = new Date(product.created_at);
-            const firstDueDate = new Date(productCreatedAt.getTime() + 24 * 60 * 60 * 1000);
-            
-            if (i === 1) {
-              dueDate.setTime(Math.max(now.getTime() + 24 * 60 * 60 * 1000, firstDueDate.getTime()));
-            } else {
-              dueDate.setMonth(dueDate.getMonth() + i - 1);
-            }
+          for (let i = 0; i < count; i++) {
+            const dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + i, expDate.getDate());
 
             const installmentRef = doc(collection(db, 'tenants', tenantId, 'installments'));
             batch.set(installmentRef, {
@@ -2962,6 +3029,8 @@ function ProductDetail() {
               owner_name: user.name,
               owner_cpf: user.cpf || '',
               amount: amountPerInstallment,
+              total_quota_price: quota.price,
+              expiration_date: product.expiration_month,
               due_date: dueDate.toISOString().split('T')[0],
               status: 'pending',
               createdAt: serverTimestamp()
@@ -3497,18 +3566,12 @@ function ProductDetail() {
                       <div className="space-y-6">
                         {product?.payment_type === 'installments' && (
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-widest opacity-40 mb-3">Número de Parcelas</label>
-                            <select 
-                              value={installmentCount}
-                              onChange={(e) => setInstallmentCount(Number(e.target.value))}
-                              className="w-full p-4 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10"
-                            >
-                              {Array.from({ length: maxInstallments }, (_, i) => i + 1).map(n => (
-                                <option key={n} value={n}>{n}x {n === 1 ? '(À vista)' : ''}</option>
-                              ))}
-                            </select>
+                            <label className="block text-xs font-bold uppercase tracking-widest opacity-40 mb-3">Número de Parcelas (Cálculo Dinâmico)</label>
+                            <div className="w-full p-4 bg-black/5 rounded-2xl font-bold text-lg">
+                              {dynamicInstallmentCount}x
+                            </div>
                             <p className="text-[10px] text-black/40 mt-2 italic">
-                              * O parcelamento deve ser encerrado impreterivelmente em {product.expiration_month ? new Date(product.expiration_month + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Dezembro'}.
+                              * O parcelamento é calculado automaticamente para encerrar em {product.expiration_month ? new Date(product.expiration_month + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Dezembro'}.
                             </p>
                           </div>
                         )}
@@ -3528,7 +3591,7 @@ function ProductDetail() {
                             <span className="font-bold text-emerald-600">
                               {(quotas
                                 .filter(q => selectedQuotas.includes(q.id))
-                                .reduce((sum, q) => sum + q.price, 0) / installmentCount)
+                                .reduce((sum, q) => sum + q.price, 0) / dynamicInstallmentCount)
                                 .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
                           </div>
@@ -3536,26 +3599,12 @@ function ProductDetail() {
                           <div className="pt-4 mt-2 border-t border-black/10">
                             <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Cronograma de Vencimentos</p>
                             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
-                              {Array.from({ length: installmentCount }, (_, i) => {
+                              {Array.from({ length: dynamicInstallmentCount }, (_, i) => {
                                 const today = new Date();
-                                const creationDate = product?.created_at ? new Date(product.created_at) : today;
-                                const firstDueDate = new Date(creationDate.getTime() + 24 * 60 * 60 * 1000);
-                                
                                 const expDate = product?.expiration_month ? new Date(product.expiration_month + 'T12:00:00') : null;
                                 const dueDay = expDate ? expDate.getDate() : 20;
                                 
-                                let d;
-                                if (i === 0) {
-                                  d = firstDueDate;
-                                } else {
-                                  // Subsequent installments on the dueDay of following months
-                                  d = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i, dueDay);
-                                  // If the calculated date is before or too close to the previous one, push it
-                                  const prevD = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i - 1, dueDay);
-                                  if (i === 1 && d <= firstDueDate) {
-                                    d = new Date(firstDueDate.getFullYear(), firstDueDate.getMonth() + i + 1, dueDay);
-                                  }
-                                }
+                                const d = new Date(today.getFullYear(), today.getMonth() + i, dueDay);
                                 
                                 return (
                                   <div key={i} className="flex justify-between text-[10px]">
@@ -3896,7 +3945,7 @@ function ClientsList() {
   const [selectedUserDetails, setSelectedUserDetails] = useState<any>(null);
   const [termContent, setTermContent] = useState('');
   const [newUser, setNewUser] = useState({ name: '', email: '', role: 'client' as Role, cpf: '', pix_key: '' });
-  const { user, tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
 
   const fetchUsers = () => {
     if (!tenantId) return;
@@ -4023,6 +4072,9 @@ function ClientsList() {
   const fetchUserDetails = async (id: string) => {
     if (!tenantId) return;
     try {
+      // Sync installments for this user before fetching details
+      await syncUserInstallments(tenantId, id);
+
       const userDoc = await getDoc(doc(db, 'tenants', tenantId, 'users', id));
       if (userDoc.exists()) {
         const userData = { id: userDoc.id, ...userDoc.data() };
@@ -4926,10 +4978,14 @@ function MyQuotas() {
 function MyPayments({ settings }: { settings: any }) {
   const [installments, setInstallments] = useState<any[]>([]);
   const [rawInstallments, setRawInstallments] = useState<any[]>([]);
-  const { user, tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
 
   useEffect(() => {
     if (!tenantId || !user) return;
+    
+    // Sync installments on load
+    syncUserInstallments(tenantId, user.id);
+
     const q = query(collection(db, 'tenants', tenantId, 'installments'), where('owner_id', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -5186,7 +5242,7 @@ function MyPayments({ settings }: { settings: any }) {
 
 function PaymentManagement() {
   const [pending, setPending] = useState<any[]>([]);
-  const { user, tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
 
   if (user?.role === 'client') return <Navigate to="/my-payments" />;
 
@@ -5232,7 +5288,12 @@ function PaymentManagement() {
     try {
       const batch = writeBatch(db);
       const now = new Date().toISOString();
+      let ownerId = '';
+      
       ids.forEach(id => {
+        const inst = pending.find(p => p.ids.includes(id));
+        if (inst) ownerId = inst.owner_id;
+
         batch.update(doc(db, 'tenants', tenantId, 'installments', id), {
           status: 'paid',
           paid_at: now
@@ -5250,6 +5311,12 @@ function PaymentManagement() {
       });
 
       await batch.commit();
+      
+      // Sync installments for the owner after payment
+      if (ownerId) {
+        syncUserInstallments(tenantId, ownerId);
+      }
+
       alert('Pagamentos confirmados com sucesso!');
     } catch (err) {
       console.error(err);
