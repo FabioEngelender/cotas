@@ -38,7 +38,7 @@ import {
   Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import { User, Product, Quota, ChatMessage, Role } from './types.js';
 import { clsx, type ClassValue } from 'clsx';
@@ -2911,10 +2911,10 @@ function ProductDetail() {
   const navigate = useNavigate();
 
   const getDynamicInstallmentCount = () => {
-    if (!product || !product.expiration_month) return 1;
+    if (!product || !product.expiration_month || !product.created_at) return 1;
     if (product.payment_type === 'cash') return 1;
     const expDate = new Date(product.expiration_month + 'T12:00:00');
-    const startDate = new Date();
+    const startDate = new Date(product.created_at);
     const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
     return Math.max(1, diffMonths + 1);
   };
@@ -3011,7 +3011,7 @@ function ProductDetail() {
 
           // Create installments based on dynamic logic
           const expDate = new Date(product.expiration_month + 'T12:00:00');
-          const startDate = new Date();
+          const startDate = new Date(product.created_at);
           const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
           const count = Math.max(1, diffMonths + 1);
           const amountPerInstallment = quota.price / count;
