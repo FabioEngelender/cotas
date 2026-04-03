@@ -842,7 +842,11 @@ function Login() {
         return;
       }
       console.error(err);
-      setError('Erro ao entrar com Google: ' + (err.message || 'Erro desconhecido'));
+      let message = 'Erro ao entrar com Google. Tente novamente.';
+      if (err.code === 'auth/invalid-credential') {
+        message = 'Credenciais inválidas ou expiradas. Tente entrar novamente.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -1122,6 +1126,8 @@ function RegisterClient() {
         message = 'A senha deve ter pelo menos 6 caracteres.';
       } else if (err.code === 'auth/invalid-email') {
         message = 'E-mail inválido.';
+      } else if (err.code === 'auth/invalid-credential') {
+        message = 'Credenciais inválidas. Verifique seu e-mail e senha.';
       }
       setError(message);
     } finally {
@@ -1382,7 +1388,11 @@ function RegisterTenant() {
       navigate('/');
     } catch (err: any) {
       console.error(err);
-      setError('Erro ao criar loja: ' + (err.message || 'Erro desconhecido'));
+      let message = 'Erro ao criar loja: ' + (err.message || 'Erro desconhecido');
+      if (err.code === 'auth/invalid-credential') {
+        message = 'Credenciais inválidas. Verifique seu e-mail e senha.';
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -1579,6 +1589,8 @@ function RegisterManager() {
         message = 'A senha deve ter pelo menos 6 caracteres.';
       } else if (err.code === 'auth/invalid-email') {
         message = 'E-mail inválido.';
+      } else if (err.code === 'auth/invalid-credential') {
+        message = 'Credenciais inválidas. Verifique seu e-mail e senha.';
       }
       setError(message);
     } finally {
@@ -1737,6 +1749,8 @@ function Register() {
         message = 'A senha deve ter pelo menos 6 caracteres.';
       } else if (err.code === 'auth/invalid-email') {
         message = 'E-mail inválido.';
+      } else if (err.code === 'auth/invalid-credential') {
+        message = 'Credenciais inválidas. Verifique seu e-mail e senha.';
       }
       setError(message);
     } finally {
@@ -2982,6 +2996,8 @@ function ProductDetail() {
     setAgreedToTerms(false);
     if (product?.payment_type === 'cash') {
       setInstallmentCount(1);
+    } else {
+      setInstallmentCount(dynamicInstallmentCount);
     }
     setShowBuyModal(true);
   };
@@ -3018,11 +3034,10 @@ function ProductDetail() {
             sold_at: now.toISOString()
           });
 
-          // Create installments based on dynamic logic
+          // Create installments based on user selection
           const expDate = new Date(product.expiration_month + 'T12:00:00');
           const startDate = new Date(product.created_at);
-          const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
-          const count = Math.max(1, diffMonths + 1);
+          const count = installmentCount;
           const amountPerInstallment = quota.price / count;
           
           for (let i = 0; i < count; i++) {
@@ -3575,12 +3590,18 @@ function ProductDetail() {
                       <div className="space-y-6">
                         {product?.payment_type === 'installments' && (
                           <div>
-                            <label className="block text-xs font-bold uppercase tracking-widest opacity-40 mb-3">Número de Parcelas (Cálculo Dinâmico)</label>
-                            <div className="w-full p-4 bg-black/5 rounded-2xl font-bold text-lg">
-                              {dynamicInstallmentCount}x
-                            </div>
+                            <label className="block text-xs font-bold uppercase tracking-widest opacity-40 mb-3">Número de Parcelas</label>
+                            <select 
+                              value={installmentCount}
+                              onChange={(e) => setInstallmentCount(parseInt(e.target.value))}
+                              className="w-full p-4 bg-black/5 rounded-2xl font-bold text-lg outline-none border-none cursor-pointer hover:bg-black/10 transition-all"
+                            >
+                              {Array.from({ length: dynamicInstallmentCount }, (_, i) => (
+                                <option key={i + 1} value={i + 1}>{i + 1}x</option>
+                              ))}
+                            </select>
                             <p className="text-[10px] text-black/40 mt-2 italic">
-                              * O parcelamento é calculado automaticamente para encerrar em {product.expiration_month ? new Date(product.expiration_month + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Dezembro'}.
+                              * Você pode escolher pagar à vista ou parcelar em até {dynamicInstallmentCount}x (limite calculado para encerrar em {product.expiration_month ? new Date(product.expiration_month + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Dezembro'}).
                             </p>
                           </div>
                         )}
@@ -3600,7 +3621,7 @@ function ProductDetail() {
                             <span className="font-bold text-emerald-600">
                               {(quotas
                                 .filter(q => selectedQuotas.includes(q.id))
-                                .reduce((sum, q) => sum + q.price, 0) / dynamicInstallmentCount)
+                                .reduce((sum, q) => sum + q.price, 0) / installmentCount)
                                 .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
                           </div>
@@ -3608,7 +3629,7 @@ function ProductDetail() {
                           <div className="pt-4 mt-2 border-t border-black/10">
                             <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Cronograma de Vencimentos</p>
                             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
-                              {Array.from({ length: dynamicInstallmentCount }, (_, i) => {
+                              {Array.from({ length: installmentCount }, (_, i) => {
                                 const today = new Date();
                                 const expDate = product?.expiration_month ? new Date(product.expiration_month + 'T12:00:00') : null;
                                 const dueDay = expDate ? expDate.getDate() : 20;
