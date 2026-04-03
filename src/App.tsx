@@ -585,6 +585,7 @@ function TenantSelection() {
   const [creating, setCreating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
 
   const isMasterAdmin = auth.currentUser?.email === "gamerengelender@gmail.com";
 
@@ -664,6 +665,22 @@ function TenantSelection() {
     );
   }
 
+  if (showLogin && !auth.currentUser) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#F5F5F0]">
+        <div className="max-w-md w-full">
+          <button 
+            onClick={() => setShowLogin(false)}
+            className="mb-8 flex items-center gap-2 text-xs font-bold uppercase tracking-widest opacity-40 hover:opacity-100 transition-all"
+          >
+            <ArrowLeft size={14} /> Voltar para Seleção de Loja
+          </button>
+          <Login />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-[#F5F5F0]">
       <motion.div 
@@ -734,19 +751,11 @@ function TenantSelection() {
           <div className="pt-4 flex flex-col items-center gap-4">
             {!auth.currentUser ? (
               <button 
-                onClick={async () => {
-                  if (isLoggingIn) return;
-                  setIsLoggingIn(true);
-                  try {
-                    await login();
-                  } finally {
-                    setIsLoggingIn(false);
-                  }
-                }}
-                disabled={isLoggingIn}
-                className="p-2 text-[#141414]/5 cursor-default disabled:opacity-50"
+                onClick={() => setShowLogin(true)}
+                className="p-2 text-[#141414]/5 cursor-default hover:text-[#141414]/20 transition-all"
+                title="Acesso Administrativo"
               >
-                {isLoggingIn ? <RefreshCw size={16} className="animate-spin" /> : <Clover size={16} />}
+                <Clover size={16} />
               </button>
             ) : (
               <div className="flex flex-col items-center gap-4">
