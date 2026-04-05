@@ -2624,6 +2624,36 @@ function ProductsList() {
       return;
     }
 
+    // Validação de parcelamento
+    if (newProduct.payment_type === 'installments') {
+      const expDate = new Date(newProduct.expiration_month + 'T12:00:00');
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const dueDay = expDate.getDate();
+      
+      let count = 0;
+      for (let i = 0; i < 24; i++) {
+        const year = now.getFullYear();
+        const month = now.getMonth() + i;
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const actualDay = Math.min(dueDay, lastDay);
+        const d = new Date(year, month, actualDay, 12, 0, 0);
+        
+        if (d < now) continue;
+        if (d > expDate) break;
+        if (count === 0) {
+          const diffDays = (d.getTime() - now.getTime()) / (1000 * 3600 * 24);
+          if (diffDays < 30) continue;
+        }
+        count++;
+        if (count >= 12) break;
+      }
+      
+      if (count === 0) {
+        return alert('A data de vencimento escolhida não permite gerar parcelas seguindo as regras (mínimo 30 dias para a primeira parcela e data final como limite).');
+      }
+    }
+
     setCreating(true);
     setCreationProgress(0);
 
@@ -2885,16 +2915,29 @@ function ProductsList() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data de Vencimento da Última Parcela</label>
-                  <div className="relative mt-1">
-                    <input 
-                      type="date"
-                      className="w-full p-4 bg-black/5 rounded-2xl appearance-none focus:ring-2 focus:ring-black/5 transition-all"
-                      value={newProduct.expiration_month}
-                      onChange={e => setNewProduct({...newProduct, expiration_month: e.target.value})}
-                      min={new Date().toISOString().slice(0, 10)}
-                    />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Tipo de Pagamento</label>
+                    <select 
+                      className="w-full p-4 bg-black/5 rounded-2xl mt-1"
+                      value={newProduct.payment_type}
+                      onChange={e => setNewProduct({...newProduct, payment_type: e.target.value})}
+                    >
+                      <option value="installments">Parcelado</option>
+                      <option value="cash">À Vista</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data de Vencimento da Última Parcela</label>
+                    <div className="relative mt-1">
+                      <input 
+                        type="date"
+                        className="w-full p-4 bg-black/5 rounded-2xl appearance-none focus:ring-2 focus:ring-black/5 transition-all"
+                        value={newProduct.expiration_month}
+                        onChange={e => setNewProduct({...newProduct, expiration_month: e.target.value})}
+                        min={new Date().toISOString().slice(0, 10)}
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -2934,12 +2977,83 @@ function ProductDetail() {
   const navigate = useNavigate();
 
   const getDynamicInstallmentCount = () => {
-    if (!product || !product.expiration_month || !product.created_at) return 1;
-    if (product.payment_type === 'cash') return 1;
+    if (!product || !product.expiration_month) return 0;
     const expDate = new Date(product.expiration_month + 'T12:00:00');
-    const startDate = new Date(product.created_at);
-    const diffMonths = (expDate.getFullYear() - startDate.getFullYear()) * 12 + (expDate.getMonth() - startDate.getMonth());
-    return Math.max(1, diffMonths + 1);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    
+    if (product.payment_type === 'cash') {
+      return expDate >= now ? 1 : 0;
+    }
+    
+    const dueDay = expDate.getDate();
+    let count = 0;
+    for (let i = 0; i < 24; i++) {
+      const year = now.getFullYear();
+      const month = now.getMonth() + i;
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      const actualDay = Math.min(dueDay, lastDay);
+      const d = new Date(year, month, actualDay, 12, 0, 0);
+      
+      // Vedação de parcelas em atraso na venda
+      if (d < now) continue;
+      
+      // Data final como parâmetro principal
+      if (d > expDate) break;
+      
+      // Ajuste quando a primeira parcela estiver próxima (< 30 dias)
+      if (count === 0) {
+        const diffTime = d.getTime() - now.getTime();
+        const diffDays = diffTime / (1000 * 3600 * 24);
+        if (diffDays < 30) {
+          // Suprimir esta parcela
+          continue;
+        }
+      }
+      
+      // Restrição de vencimentos no mesmo mês:
+      // The loop naturally handles one per month by incrementing 'i'.
+      
+      count++;
+      if (count >= 12) break; // Limite de 12 parcelas
+    }
+    
+    return count;
+  };
+
+  const getInstallmentDates = (count: number) => {
+    if (!product || !product.expiration_month) return [];
+    if (product.payment_type === 'cash') {
+      const now = new Date();
+      now.setHours(12, 0, 0, 0);
+      return [now];
+    }
+    
+    const expDate = new Date(product.expiration_month + 'T12:00:00');
+    const dueDay = expDate.getDate();
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    
+    const dates: Date[] = [];
+    for (let i = 0; i < 24; i++) {
+      const year = now.getFullYear();
+      const month = now.getMonth() + i;
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      const actualDay = Math.min(dueDay, lastDay);
+      const d = new Date(year, month, actualDay, 12, 0, 0);
+      
+      if (d < now) continue;
+      if (d > expDate) break;
+      
+      if (dates.length === 0) {
+        const diffDays = (d.getTime() - now.getTime()) / (1000 * 3600 * 24);
+        if (diffDays < 30) continue;
+      }
+      
+      dates.push(d);
+      if (dates.length >= count) break;
+    }
+    return dates;
   };
 
   const dynamicInstallmentCount = getDynamicInstallmentCount();
@@ -2993,11 +3107,16 @@ function ProductDetail() {
 
   const handleBuy = async () => {
     if (selectedQuotas.length === 0) return;
+    const count = getDynamicInstallmentCount();
+    if (count === 0) {
+      alert('Este produto não pode mais ser adquirido ou parcelado pois a data final está muito próxima ou já expirou.');
+      return;
+    }
     setAgreedToTerms(false);
     if (product?.payment_type === 'cash') {
       setInstallmentCount(1);
     } else {
-      setInstallmentCount(dynamicInstallmentCount);
+      setInstallmentCount(count);
     }
     setShowBuyModal(true);
   };
@@ -3034,14 +3153,14 @@ function ProductDetail() {
             sold_at: now.toISOString()
           });
 
-          // Create installments based on user selection
-          const expDate = new Date(product.expiration_month + 'T12:00:00');
-          const startDate = new Date(product.created_at);
-          const count = installmentCount;
-          const amountPerInstallment = quota.price / count;
+          // Create installments based on user selection and new rules
+          const dates = getInstallmentDates(installmentCount);
+          if (dates.length === 0) throw new Error('Não foi possível gerar o cronograma de parcelas.');
           
-          for (let i = 0; i < count; i++) {
-            const dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + i, expDate.getDate());
+          const amountPerInstallment = quota.price / dates.length;
+          
+          for (let i = 0; i < dates.length; i++) {
+            const dueDate = dates[i];
 
             const installmentRef = doc(collection(db, 'tenants', tenantId, 'installments'));
             batch.set(installmentRef, {
@@ -3301,7 +3420,13 @@ function ProductDetail() {
   };
 
   const [isEditing, setIsEditing] = useState(false);
-  const [editedProduct, setEditedProduct] = useState({ name: '', description: '', image_url: '', expiration_month: '' });
+  const [editedProduct, setEditedProduct] = useState({ 
+    name: '', 
+    description: '', 
+    image_url: '', 
+    expiration_month: '',
+    payment_type: 'installments' as 'cash' | 'installments'
+  });
 
   useEffect(() => {
     if (product) {
@@ -3309,13 +3434,45 @@ function ProductDetail() {
         name: product.name, 
         description: product.description, 
         image_url: product.image_url || '',
-        expiration_month: product.expiration_month || ''
+        expiration_month: product.expiration_month || '',
+        payment_type: product.payment_type || 'installments'
       });
     }
   }, [product]);
 
   const handleUpdateProduct = async () => {
     if (!tenantId || !id) return;
+
+    // Validação de parcelamento se o tipo for parcelado
+    if (editedProduct.payment_type === 'installments') {
+      const expDate = new Date(editedProduct.expiration_month + 'T12:00:00');
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const dueDay = expDate.getDate();
+      
+      let count = 0;
+      for (let i = 0; i < 24; i++) {
+        const year = now.getFullYear();
+        const month = now.getMonth() + i;
+        const lastDay = new Date(year, month + 1, 0).getDate();
+        const actualDay = Math.min(dueDay, lastDay);
+        const d = new Date(year, month, actualDay, 12, 0, 0);
+        
+        if (d < now) continue;
+        if (d > expDate) break;
+        if (count === 0) {
+          const diffDays = (d.getTime() - now.getTime()) / (1000 * 3600 * 24);
+          if (diffDays < 30) continue;
+        }
+        count++;
+        if (count >= 12) break;
+      }
+      
+      if (count === 0) {
+        return alert('A data de vencimento escolhida não permite gerar parcelas seguindo as regras (mínimo 30 dias para a primeira parcela e data final como limite).');
+      }
+    }
+
     try {
       await updateDoc(doc(db, 'tenants', tenantId, 'products', id), editedProduct);
       setIsEditing(false);
@@ -3391,14 +3548,27 @@ function ProductDetail() {
                     />
                   </label>
                 </div>
-                <div className="relative">
-                  <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data de Vencimento Final</label>
-                  <input 
-                    type="date"
-                    className="w-full p-4 bg-black/5 rounded-2xl mt-1" 
-                    value={editedProduct.expiration_month}
-                    onChange={e => setEditedProduct({...editedProduct, expiration_month: e.target.value})}
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Tipo de Pagamento</label>
+                    <select 
+                      className="w-full p-4 bg-black/5 rounded-2xl mt-1"
+                      value={editedProduct.payment_type}
+                      onChange={e => setEditedProduct({...editedProduct, payment_type: e.target.value as 'cash' | 'installments'})}
+                    >
+                      <option value="installments">Parcelado</option>
+                      <option value="cash">À Vista</option>
+                    </select>
+                  </div>
+                  <div className="relative">
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data de Vencimento Final</label>
+                    <input 
+                      type="date"
+                      className="w-full p-4 bg-black/5 rounded-2xl mt-1" 
+                      value={editedProduct.expiration_month}
+                      onChange={e => setEditedProduct({...editedProduct, expiration_month: e.target.value})}
+                    />
+                  </div>
                 </div>
               </div>
               <textarea 
@@ -3629,13 +3799,7 @@ function ProductDetail() {
                           <div className="pt-4 mt-2 border-t border-black/10">
                             <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Cronograma de Vencimentos</p>
                             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
-                              {Array.from({ length: installmentCount }, (_, i) => {
-                                const today = new Date();
-                                const expDate = product?.expiration_month ? new Date(product.expiration_month + 'T12:00:00') : null;
-                                const dueDay = expDate ? expDate.getDate() : 20;
-                                
-                                const d = new Date(today.getFullYear(), today.getMonth() + i, dueDay);
-                                
+                              {getInstallmentDates(installmentCount).map((d, i) => {
                                 return (
                                   <div key={i} className="flex justify-between text-[10px]">
                                     <span className="opacity-60">{i + 1}ª Parcela</span>
