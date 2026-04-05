@@ -35,7 +35,8 @@ import {
   Share,
   UserPlus,
   Clover,
-  Camera
+  Camera,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -77,7 +78,7 @@ const maskCEP = (value: string) => {
 
 import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment, deleteField } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { testConnection } from './firebaseService.js';
 
@@ -146,6 +147,62 @@ const AuthContext = React.createContext<{
 
 export const ADMIN_MASTER_EMAIL = 'gamerengelender@gmail.com';
 
+// --- Recurrent Logic ---
+const checkRecurrentDefaults = async (tenantId: string) => {
+  const now = new Date();
+  now.setHours(23, 59, 59, 999);
+  
+  const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+  const q = query(
+    installmentsRef, 
+    where('status', '==', 'pending'),
+    where('due_date', '<', now.toISOString().split('T')[0])
+  );
+  
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) return;
+  
+  const batch = writeBatch(db);
+  const processedQuotas = new Set<string>();
+  
+  for (const installmentDoc of snapshot.docs) {
+    const data = installmentDoc.data();
+    const productRef = doc(db, 'tenants', tenantId, 'products', data.product_id);
+    const productSnap = await getDoc(productRef);
+    
+    if (productSnap.exists() && productSnap.data().payment_type === 'recurrent') {
+      const quotaId = data.quota_id;
+      if (processedQuotas.has(quotaId)) continue;
+      processedQuotas.add(quotaId);
+      
+      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
+      batch.update(quotaRef, {
+        status: 'defaulted'
+      });
+      
+      const futureQ = query(
+        installmentsRef,
+        where('quota_id', '==', quotaId),
+        where('status', '==', 'pending')
+      );
+      const futureSnapshot = await getDocs(futureQ);
+      futureSnapshot.docs.forEach(d => {
+        batch.delete(d.ref);
+      });
+      
+      const logRef = doc(collection(db, 'tenants', tenantId, 'logs'));
+      batch.set(logRef, {
+        action: 'AUTO_REMOVAL',
+        details: `Cliente ${data.owner_name} removido por inadimplência no produto ${data.product_name} (Cota ${data.quota_number})`,
+        userId: 'system',
+        createdAt: serverTimestamp()
+      });
+    }
+  }
+  
+  await batch.commit();
+};
+
 export default function App() {
   const [user, setUser] = useState<any | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -153,8 +210,13 @@ export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    let unsubUser: (() => void) | null = null;
+    if (tenantId && user && (user.role === 'admin' || user.role === 'manager')) {
+      checkRecurrentDefaults(tenantId);
+    }
+  }, [tenantId, user]);
 
+  useEffect(() => {
+    let unsubUser: (() => void) | null = null;
     const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
       const currentTenantId = tenantId || localStorage.getItem('tenantId');
       
@@ -2921,10 +2983,11 @@ function ProductsList() {
                     <select 
                       className="w-full p-4 bg-black/5 rounded-2xl mt-1"
                       value={newProduct.payment_type}
-                      onChange={e => setNewProduct({...newProduct, payment_type: e.target.value})}
+                      onChange={e => setNewProduct({...newProduct, payment_type: e.target.value as 'cash' | 'installments' | 'recurrent'})}
                     >
                       <option value="installments">Parcelado</option>
                       <option value="cash">À Vista</option>
+                      <option value="recurrent">Recorrente (Mensal Fixo)</option>
                     </select>
                   </div>
                   <div>
@@ -2940,6 +3003,13 @@ function ProductsList() {
                     </div>
                   </div>
                 </div>
+
+                {newProduct.payment_type === 'recurrent' && (
+                  <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-3">
+                    <Info size={18} className="text-emerald-600" />
+                    <p className="text-xs font-bold text-emerald-700">Este Produto tem Valor Mensal Inalterável</p>
+                  </div>
+                )}
 
                 <button 
                   onClick={handleCreateProduct}
@@ -2995,27 +3065,17 @@ function ProductDetail() {
       const actualDay = Math.min(dueDay, lastDay);
       const d = new Date(year, month, actualDay, 12, 0, 0);
       
-      // Vedação de parcelas em atraso na venda
       if (d < now) continue;
-      
-      // Data final como parâmetro principal
       if (d > expDate) break;
       
-      // Ajuste quando a primeira parcela estiver próxima (< 30 dias)
       if (count === 0) {
         const diffTime = d.getTime() - now.getTime();
         const diffDays = diffTime / (1000 * 3600 * 24);
-        if (diffDays < 30) {
-          // Suprimir esta parcela
-          continue;
-        }
+        if (diffDays < 30) continue;
       }
       
-      // Restrição de vencimentos no mesmo mês:
-      // The loop naturally handles one per month by incrementing 'i'.
-      
       count++;
-      if (count >= 12) break; // Limite de 12 parcelas
+      if (count >= 12) break;
     }
     
     return count;
@@ -3057,6 +3117,14 @@ function ProductDetail() {
   };
 
   const dynamicInstallmentCount = getDynamicInstallmentCount();
+
+  useEffect(() => {
+    if (product?.payment_type === 'recurrent') {
+      setInstallmentCount(dynamicInstallmentCount);
+    } else {
+      setInstallmentCount(1);
+    }
+  }, [product, dynamicInstallmentCount]);
 
   useEffect(() => {
     if (!id || !tenantId) return;
@@ -3157,7 +3225,7 @@ function ProductDetail() {
           const dates = getInstallmentDates(installmentCount);
           if (dates.length === 0) throw new Error('Não foi possível gerar o cronograma de parcelas.');
           
-          const amountPerInstallment = quota.price / dates.length;
+          const amountPerInstallment = product.payment_type === 'recurrent' ? quota.price : quota.price / dates.length;
           
           for (let i = 0; i < dates.length; i++) {
             const dueDate = dates[i];
@@ -3334,6 +3402,25 @@ function ProductDetail() {
     }
     
     doc.save(`termo_adesao_${product?.name?.replace(/\s+/g, '_')}.pdf`);
+  };
+
+  const handleResetDefaultedQuota = async (quotaId: string) => {
+    if (!tenantId) return;
+    if (!window.confirm('Deseja disponibilizar esta cota novamente para venda?')) return;
+    try {
+      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
+      await updateDoc(quotaRef, {
+        status: 'available',
+        owner_id: deleteField(),
+        owner_name: deleteField(),
+        owner_cpf: deleteField(),
+        sold_at: deleteField()
+      });
+      alert('Cota disponibilizada com sucesso!');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao resetar cota');
+    }
   };
 
   const handleCancelSale = async (quotaId: string) => {
@@ -3631,6 +3718,7 @@ function ProductDetail() {
                     "aspect-[2/1] rounded-lg text-[10px] font-bold transition-all flex items-center justify-center border border-black/5",
                     quota.status === 'sold' ? "bg-red-500/10 text-red-600" : 
                     quota.status === 'grouped' ? "bg-amber-500/10 text-amber-600" :
+                    quota.status === 'defaulted' ? "bg-[repeating-linear-gradient(45deg,#ef4444,#ef4444_5px,#10b981_5px,#10b981_10px)] text-white" :
                     "bg-emerald-500/10 text-emerald-600 hover:scale-110",
                     selectedQuotas.includes(quota.id) && "ring-2 ring-black bg-black text-white"
                   )}
@@ -3641,6 +3729,8 @@ function ProductDetail() {
                       );
                     } else if (quota.status === 'sold' && user.role === 'admin') {
                       handleCancelSale(quota.id);
+                    } else if (quota.status === 'defaulted' && user.role === 'admin') {
+                      handleResetDefaultedQuota(quota.id);
                     }
                   }}
                 >
@@ -3754,9 +3844,18 @@ function ProductDetail() {
                       <p className="text-black/50 mb-8">
                         {product?.payment_type === 'cash' 
                           ? 'Este produto aceita apenas pagamento à vista.' 
+                          : product?.payment_type === 'recurrent'
+                          ? 'Este produto possui cobrança recorrente mensal fixa.'
                           : 'Escolha o número de parcelas para sua compra.'}
                       </p>
                       
+                      {product?.payment_type === 'recurrent' && (
+                        <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-3 mb-6">
+                          <Info size={18} className="text-emerald-600" />
+                          <p className="text-xs font-bold text-emerald-700">Este Produto tem Valor Mensal Inalterável</p>
+                        </div>
+                      )}
+
                       <div className="space-y-6">
                         {product?.payment_type === 'installments' && (
                           <div>
@@ -3780,29 +3879,32 @@ function ProductDetail() {
                           <div className="flex justify-between text-sm">
                             <span className="opacity-60">Valor Total</span>
                             <span className="font-bold">
-                              {quotas
-                                .filter(q => selectedQuotas.includes(q.id))
-                                .reduce((sum, q) => sum + q.price, 0)
-                                .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              {product?.payment_type === 'recurrent' 
+                                ? (quotas.find(q => selectedQuotas.includes(q.id))?.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ' / mês')
+                                : (quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }))}
                             </span>
                           </div>
                           <div className="flex justify-between text-sm">
-                            <span className="opacity-60">Valor por Parcela</span>
+                            <span className="opacity-60">
+                              {product?.payment_type === 'recurrent' ? 'Valor Mensal' : 'Valor por Parcela'}
+                            </span>
                             <span className="font-bold text-emerald-600">
-                              {(quotas
-                                .filter(q => selectedQuotas.includes(q.id))
-                                .reduce((sum, q) => sum + q.price, 0) / installmentCount)
-                                .toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              {(product?.payment_type === 'recurrent'
+                                ? (quotas.find(q => selectedQuotas.includes(q.id))?.price || 0)
+                                : (quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0) / installmentCount)
+                              ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
                           </div>
                           
                           <div className="pt-4 mt-2 border-t border-black/10">
-                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">Cronograma de Vencimentos</p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">
+                              {product?.payment_type === 'recurrent' ? 'Cronograma de Mensalidades' : 'Cronograma de Vencimentos'}
+                            </p>
                             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
                               {getInstallmentDates(installmentCount).map((d, i) => {
                                 return (
                                   <div key={i} className="flex justify-between text-[10px]">
-                                    <span className="opacity-60">{i + 1}ª Parcela</span>
+                                    <span className="opacity-60">{i + 1}ª {product?.payment_type === 'recurrent' ? 'Mensalidade' : 'Parcela'}</span>
                                     <span className="font-mono font-bold">{d.toLocaleDateString('pt-BR')}</span>
                                   </div>
                                 );

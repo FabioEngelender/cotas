@@ -21,7 +21,7 @@ export interface Product {
   quota_price: number;
   available_quotas: number;
   sold_quotas: number;
-  payment_type: 'cash' | 'installments';
+  payment_type: 'cash' | 'installments' | 'recurrent';
   expiration_month?: string;
   created_at: string;
 }
@@ -31,9 +31,13 @@ export interface Quota {
   product_id: string;
   number: string;
   owner_id?: string;
-  status: 'available' | 'sold' | 'grouped';
+  owner_name?: string;
+  owner_cpf?: string;
+  product_name?: string;
+  status: 'available' | 'sold' | 'grouped' | 'defaulted';
   price: number;
   parent_quota_id?: string;
+  sold_at?: string;
 }
 
 export interface ChatMessage {
