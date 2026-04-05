@@ -2057,14 +2057,22 @@ function SettingsPage() {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSettings({ ...settings, image_url: reader.result as string });
-      };
-      reader.readAsDataURL(file);
+    if (!file || !tenantId) return;
+
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `tenant-logo-${Date.now()}.${fileExt}`;
+      const storageRef = ref(storage, `tenants/${tenantId}/settings/${fileName}`);
+      
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      
+      setSettings({ ...settings, image_url: downloadURL });
+    } catch (err) {
+      console.error("Error uploading image:", err);
+      alert("Erro ao fazer upload da imagem.");
     }
   };
 
@@ -2786,14 +2794,22 @@ function ProductsList() {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        callback(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file || !tenantId) return;
+
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `product-${Date.now()}.${fileExt}`;
+      const storageRef = ref(storage, `tenants/${tenantId}/products/${fileName}`);
+      
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      
+      callback(downloadURL);
+    } catch (err) {
+      console.error("Error uploading image:", err);
+      alert("Erro ao fazer upload da imagem.");
     }
   };
 
@@ -2934,7 +2950,7 @@ function ProductsList() {
                           type="file" 
                           className="hidden" 
                           accept="image/*"
-                          onChange={e => handleImageUpload(e, (base64) => setNewProduct({...newProduct, image_url: base64}))}
+                          onChange={e => handleImageUpload(e, (url) => setNewProduct({...newProduct, image_url: url}))}
                         />
                       </label>
                     </div>
@@ -3570,14 +3586,22 @@ function ProductDetail() {
     }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, callback: (base64: string) => void) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, callback: (url: string) => void) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        callback(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    if (!file || !tenantId) return;
+
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `product-edit-${Date.now()}.${fileExt}`;
+      const storageRef = ref(storage, `tenants/${tenantId}/products/${fileName}`);
+      
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadURL = await getDownloadURL(snapshot.ref);
+      
+      callback(downloadURL);
+    } catch (err) {
+      console.error("Error uploading image:", err);
+      alert("Erro ao fazer upload da imagem.");
     }
   };
 
@@ -3631,7 +3655,7 @@ function ProductDetail() {
                       type="file" 
                       className="hidden" 
                       accept="image/*"
-                      onChange={e => handleImageUpload(e, (base64) => setEditedProduct({...editedProduct, image_url: base64}))}
+                      onChange={e => handleImageUpload(e, (url) => setEditedProduct({...editedProduct, image_url: url}))}
                     />
                   </label>
                 </div>
