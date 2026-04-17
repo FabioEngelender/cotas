@@ -203,6 +203,52 @@ const checkRecurrentDefaults = async (tenantId: string) => {
   await batch.commit();
 };
 
+// --- Cleanup Logic ---
+const cleanupOldLogs = async (tenantId: string) => {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 750);
+  
+  const q = query(
+    collection(db, 'tenants', tenantId, 'audit_logs'), 
+    where('created_at', '<', cutoff),
+    limit(100)
+  );
+  
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) return;
+  
+  const batch = writeBatch(db);
+  snapshot.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+};
+
+const scanOrphanedInstallments = async (tenantId: string) => {
+  const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+  const q = query(installmentsRef, where('status', '==', 'pending'), limit(20));
+  const snapshot = await getDocs(q);
+  
+  if (snapshot.empty) return;
+  
+  const batch = writeBatch(db);
+  let changed = false;
+  
+  for (const instDoc of snapshot.docs) {
+    const data = instDoc.data();
+    if (data.owner_id) {
+      const userRef = doc(db, 'tenants', tenantId, 'users', data.owner_id);
+      const userSnap = await getDoc(userRef);
+      if (!userSnap.exists()) {
+        batch.delete(instDoc.ref);
+        changed = true;
+      }
+    }
+  }
+  
+  if (changed) {
+    await batch.commit();
+  }
+};
+
 export default function App() {
   const [user, setUser] = useState<any | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -212,6 +258,8 @@ export default function App() {
   useEffect(() => {
     if (tenantId && user && (user.role === 'admin' || user.role === 'manager')) {
       checkRecurrentDefaults(tenantId);
+      cleanupOldLogs(tenantId);
+      scanOrphanedInstallments(tenantId);
     }
   }, [tenantId, user]);
 
@@ -2507,7 +2555,10 @@ function Dashboard() {
                     <td className="py-4">
                       <div className="w-24 h-2 bg-black/5 rounded-full overflow-hidden">
                         <div 
-                          className="h-full bg-emerald-500 transition-all" 
+                          className={cn(
+                            "h-full transition-all",
+                            sale.paid_installments === sale.total_installments ? "bg-blue-500" : "bg-emerald-500"
+                          )} 
                           style={{ width: `${sale.total_installments > 0 ? (sale.paid_installments / sale.total_installments) * 100 : 0}%` }}
                         />
                       </div>
@@ -3218,6 +3269,7 @@ function ProductDetail() {
             owner_cpf: user.cpf || '',
             product_name: product.name,
             status: 'sold',
+            is_paid: false,
             sold_at: now.toISOString()
           });
 
@@ -3414,7 +3466,8 @@ function ProductDetail() {
         owner_id: deleteField(),
         owner_name: deleteField(),
         owner_cpf: deleteField(),
-        sold_at: deleteField()
+        sold_at: deleteField(),
+        is_paid: deleteField()
       });
       alert('Cota disponibilizada com sucesso!');
     } catch (err) {
@@ -3432,9 +3485,11 @@ function ProductDetail() {
       // Update quota status
       await updateDoc(doc(db, 'tenants', tenantId, 'quotas', quotaId), {
         status: 'available',
-        owner_id: null,
-        owner_name: null,
-        owner_cpf: null
+        owner_id: deleteField(),
+        owner_name: deleteField(),
+        owner_cpf: deleteField(),
+        sold_at: deleteField(),
+        is_paid: deleteField()
       });
 
       // Delete associated installments
@@ -3704,7 +3759,8 @@ function ProductDetail() {
               <h3 className="font-bold text-xl">Mapa de Cotas</h3>
               <div className="flex gap-4 text-xs font-bold uppercase tracking-widest">
                 <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500" /> Disponível</span>
-                <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500" /> Vendida</span>
+                <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-red-500" /> Em Aberto</span>
+                <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500" /> Quitada</span>
                 <span className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-amber-500" /> Agrupada</span>
               </div>
             </div>
@@ -3716,7 +3772,7 @@ function ProductDetail() {
                   title={`Cota ${quota.number || i + 1} - ${quota.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`}
                   className={cn(
                     "aspect-[2/1] rounded-lg text-[10px] font-bold transition-all flex items-center justify-center border border-black/5",
-                    quota.status === 'sold' ? "bg-red-500/10 text-red-600" : 
+                    quota.status === 'sold' ? (quota.is_paid ? "bg-blue-500/10 text-blue-600" : "bg-red-500/10 text-red-600") : 
                     quota.status === 'grouped' ? "bg-amber-500/10 text-amber-600" :
                     quota.status === 'defaulted' ? "bg-[repeating-linear-gradient(45deg,#ef4444,#ef4444_5px,#10b981_5px,#10b981_10px)] text-white" :
                     "bg-emerald-500/10 text-emerald-600 hover:scale-110",
@@ -4461,19 +4517,45 @@ function ClientsList() {
 
   const deleteUser = async (id: string) => {
     if (!tenantId) return;
-    if (!confirm('Tem certeza que deseja excluir este usuário?')) return;
+    if (!confirm('Tem certeza que deseja excluir este usuário? Todos os seus pagamentos pendentes e compras vinculadas serão cancelados.')) return;
     try {
-      await deleteDoc(doc(db, 'tenants', tenantId, 'users', id));
+      const batch = writeBatch(db);
+
+      // 1. Mark quotas as defaulted (legal requirement: don't automatically back to available)
+      const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
+      const qQuotas = query(quotasRef, where('owner_id', '==', id));
+      const qSnapshot = await getDocs(qQuotas);
       
-      // Log audit
+      for (const qDoc of qSnapshot.docs) {
+        batch.update(qDoc.ref, {
+          status: 'defaulted'
+          // We keep owner info (owner_name, owner_cpf) for legal audit trail
+        });
+      }
+      
+      // 2. Delete pending installments for this user
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const qInst = query(installmentsRef, where('owner_id', '==', id), where('status', '==', 'pending'));
+      const instSnapshot = await getDocs(qInst);
+      for (const iDoc of instSnapshot.docs) {
+        batch.delete(iDoc.ref);
+      }
+
+      // 3. Delete user doc
+      batch.delete(doc(db, 'tenants', tenantId, 'users', id));
+      
+      // 4. Log audit
       const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      await setDoc(auditRef, {
+      batch.set(auditRef, {
         user_id: user?.id || 'Sistema',
         user_name: user?.name || 'Sistema',
         action: 'EXCLUIR_USUARIO',
-        details: `Excluiu o usuário ID: ${id}`,
+        details: `Excluiu o usuário ID: ${id} e limpou dados vinculados.`,
         created_at: serverTimestamp()
       });
+
+      await batch.commit();
+      alert('Usuário e seus dados pendentes foram excluídos com sucesso!');
     } catch (err) {
       console.error(err);
       alert('Erro ao excluir usuário');
@@ -5585,16 +5667,41 @@ function PaymentManagement() {
       const batch = writeBatch(db);
       const now = new Date().toISOString();
       let ownerId = '';
+      const affectedQuotaIds = new Set<string>();
       
-      ids.forEach(id => {
-        const inst = pending.find(p => p.ids.includes(id));
-        if (inst) ownerId = inst.owner_id;
+      for (const id of ids) {
+        const instDoc = await getDoc(doc(db, 'tenants', tenantId, 'installments', id));
+        if (instDoc.exists()) {
+          const data = instDoc.data();
+          ownerId = data.owner_id;
+          affectedQuotaIds.add(data.quota_id);
+          
+          batch.update(instDoc.ref, {
+            status: 'paid',
+            paid_at: now
+          });
+        }
+      }
 
-        batch.update(doc(db, 'tenants', tenantId, 'installments', id), {
-          status: 'paid',
-          paid_at: now
-        });
-      });
+      // 1. Check quitação for each affected quota
+      for (const qId of affectedQuotaIds) {
+        const qRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+        const installmentsQ = query(
+          collection(db, 'tenants', tenantId, 'installments'),
+          where('quota_id', '==', qId)
+        );
+        const instSnapshot = await getDocs(installmentsQ);
+        
+        // We consider it paid if there are NO 'pending' installments left
+        // Note: we account for the ones we just marked as paid in the batch conceptually
+        const remainingPending = instSnapshot.docs.filter(d => 
+          d.data().status === 'pending' && !ids.includes(d.id)
+        );
+        
+        if (remainingPending.length === 0) {
+          batch.update(qRef, { is_paid: true });
+        }
+      }
 
       // Log audit
       const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));

@@ -38,6 +38,7 @@ export interface Quota {
   price: number;
   parent_quota_id?: string;
   sold_at?: string;
+  is_paid?: boolean;
 }
 
 export interface ChatMessage {
