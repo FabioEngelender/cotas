@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { useState } from 'react';
-import { useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter as Router } from 'react-router-dom';
 import { Routes } from 'react-router-dom';
 import { Route } from 'react-router-dom';
@@ -36,12 +35,15 @@ import {
   UserPlus,
   Clover,
   Camera,
-  Info
+  Info,
+  History,
+  Search
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
-import { User, Product, Quota, ChatMessage, Role } from './types.js';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { User, Product, Quota, ChatMessage, Role, OwnershipHistory, Installment } from './types.js';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -602,6 +604,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
           {user.role !== 'client' && (
             <>
               <SidebarLink to="/clients" icon={<Users size={20} />} label="Clientes" isOpen={showLabels} />
+              <SidebarLink to="/finance" icon={<CreditCard size={20} />} label="Financeiro" isOpen={showLabels} />
               <SidebarLink to="/payments" icon={<CreditCard size={20} />} label="Pagamentos" isOpen={showLabels} />
             </>
           )}
@@ -625,6 +628,8 @@ function AuthenticatedApp({ settings }: { settings: any }) {
             {showLabels && <span className="font-medium">Convidar</span>}
           </button>
         </nav>
+
+        <AdBanner slot="your-ad-slot-id" showLabels={showLabels} />
 
         <div className="p-4 border-t border-[#141414]/5">
           <div className={cn("flex items-center gap-3 p-3 rounded-xl bg-black/5", !showLabels && "justify-center")}>
@@ -681,6 +686,35 @@ function SidebarLink({ to, icon, label, isOpen }: { to: string, icon: React.Reac
       <span className="text-black/60 group-hover:text-black">{icon}</span>
       {isOpen && <span className="font-medium">{label}</span>}
     </Link>
+  );
+}
+
+function AdBanner({ slot, showLabels }: { slot: string, showLabels: boolean }) {
+  useEffect(() => {
+    try {
+      // @ts-ignore
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+    } catch (e) {
+      // Ads might be blocked by browser
+    }
+  }, []);
+
+  if (!showLabels) return null;
+
+  return (
+    <div className="mt-auto p-4 border-t border-black/5 overflow-hidden min-h-[50px]">
+      <p className="text-[10px] font-bold uppercase tracking-widest opacity-20 mb-2 text-center">Publicidade</p>
+      {/* 
+          IMPORTANT: Replace ca-pub-XXXXXXXXXXXXXXXX with your actual Publisher ID 
+          and your-ad-slot-id with your actual Ad Slot ID.
+      */}
+      <ins className="adsbygoogle"
+           style={{ display: 'block' }}
+           data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+           data-ad-slot={slot}
+           data-ad-format="auto"
+           data-full-width-responsive="true"></ins>
+    </div>
   );
 }
 
@@ -2385,7 +2419,7 @@ function Dashboard() {
 
       const soldQuotas = quotas.filter(q => q.status === 'sold');
       const receivedPayments = installments
-        .filter(i => i.status === 'paid')
+        .filter(i => i.status === 'paid' || i.status === 'refund')
         .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
       const pendingPayments = installments
         .filter(i => i.status === 'pending')
@@ -2396,7 +2430,7 @@ function Dashboard() {
         const pInstallments = installments.filter(i => i.product_id === p.id);
         
         const revenue = pInstallments
-          .filter(i => i.status === 'paid')
+          .filter(i => i.status === 'paid' || i.status === 'refund')
           .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
         const sales_details = pQuotas.map(q => {
@@ -2707,7 +2741,10 @@ function ProductsList() {
     total_quotas: '', 
     quota_price: '',
     payment_type: 'installments',
-    expiration_month: ''
+    expiration_month: '',
+    default_rule_type: 'percentage_of_paid',
+    retention_percent: 25,
+    allow_manual_adjustment: true
   });
   const { user, tenantId } = React.useContext(AuthContext)!;
 
@@ -2826,7 +2863,10 @@ function ProductsList() {
         total_quotas: '', 
         quota_price: '',
         payment_type: 'installments',
-        expiration_month: ''
+        expiration_month: '',
+        default_rule_type: 'percentage_of_paid',
+        retention_percent: 25,
+        allow_manual_adjustment: true
       });
     } catch (err) {
       console.error(err);
@@ -3062,6 +3102,46 @@ function ProductsList() {
                   </div>
                 )}
 
+                <div className="p-6 bg-black/5 rounded-3xl space-y-4">
+                  <h4 className="text-sm font-bold uppercase tracking-widest opacity-40">Regra de Inadimplência</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Tipo de Retenção</label>
+                      <select 
+                        className="w-full p-4 bg-white rounded-xl mt-1 text-sm outline-none"
+                        value={newProduct.default_rule_type}
+                        onChange={e => setNewProduct({...newProduct, default_rule_type: e.target.value})}
+                      >
+                        <option value="percentage_of_paid">Perc. sobre valor pago</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Percentual (%)</label>
+                      <input 
+                        className="w-full p-4 bg-white rounded-xl mt-1 text-sm outline-none" 
+                        type="number"
+                        value={newProduct.retention_percent}
+                        onChange={e => setNewProduct({...newProduct, retention_percent: Number(e.target.value)})}
+                      />
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <div className={cn(
+                      "w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all",
+                      newProduct.allow_manual_adjustment ? "bg-black border-black" : "border-black/20 group-hover:border-black/40"
+                    )}>
+                      {newProduct.allow_manual_adjustment && <Check size={14} className="text-white" />}
+                    </div>
+                    <input 
+                      type="checkbox" 
+                      className="hidden" 
+                      checked={newProduct.allow_manual_adjustment}
+                      onChange={e => setNewProduct({...newProduct, allow_manual_adjustment: e.target.checked})}
+                    />
+                    <span className="text-sm font-medium">Permitir ajuste manual pelo administrador</span>
+                  </label>
+                </div>
+
                 <button 
                   onClick={handleCreateProduct}
                   disabled={creating}
@@ -3223,8 +3303,607 @@ function ProductDetail() {
   }, [id, tenantId]);
 
   const [isPurchasing, setIsPurchasing] = useState(false);
+  const [showCancellationModal, setShowCancellationModal] = useState<string | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [cancellationData, setCancellationData] = useState<any>(null);
+  const [manualRefundValue, setManualRefundValue] = useState<number>(0);
+  const [cancellationProofUrl, setCancellationProofUrl] = useState('');
+  const [isProcessingCancellation, setIsProcessingCancellation] = useState(false);
+  const [showResaleModal, setShowResaleModal] = useState<string | null>(null);
+  const [newOwnerId, setNewOwnerId] = useState('');
+  const [isProcessingResale, setIsProcessingResale] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [isClosingProduct, setIsClosingProduct] = useState(false);
+  const [showQuotaMenu, setShowQuotaMenu] = useState<string | null>(null);
+  const [showHistoryModal, setShowHistoryModal] = useState<string | null>(null);
+  const [quotaHistory, setQuotaHistory] = useState<OwnershipHistory[]>([]);
+  const [clients, setClients] = useState<User[]>([]);
+  const [searchClient, setSearchClient] = useState('');
+
+  useEffect(() => {
+    if (!tenantId || user?.role === 'client') return;
+    const clientsRef = collection(db, 'tenants', tenantId, 'users');
+    const q = query(clientsRef, where('role', '==', 'client'));
+    return onSnapshot(q, (snapshot) => {
+      setClients(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
+    });
+  }, [tenantId, user?.role]);
+
+  const openCancellationModal = async (quotaId: string) => {
+    if (!tenantId || !product) return;
+    if (product.status === 'closed') return alert('Este produto está encerrado. Nenhuma alteração é permitida.');
+    const quota = quotas.find(q => q.id === quotaId);
+    if (!quota) return;
+
+    try {
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'paid'));
+      const snapshot = await getDocs(q);
+      
+      const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
+      const retentionPercent = product.retention_percent || 0;
+      const retentionValue = totalPaid * (retentionPercent / 100);
+      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
+
+      setCancellationData({
+        quotaId,
+        quotaNumber: quota.number,
+        totalPaid,
+        retentionPercent,
+        retentionValue,
+        suggestedRefund
+      });
+      setManualRefundValue(suggestedRefund);
+      setShowCancellationModal(quotaId);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao carregar dados de cancelamento');
+    }
+  };
+
+  const openResaleModal = async (quotaId: string) => {
+    if (!tenantId || !product) return;
+    if (product.status === 'closed') return alert('Este produto está encerrado. Nenhuma alteração é permitida.');
+    const quota = quotas.find(q => q.id === quotaId);
+    if (!quota) return;
+
+    try {
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'paid'));
+      const snapshot = await getDocs(q);
+      
+      const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
+      const retentionPercent = product.retention_percent || 0;
+      const retentionValue = totalPaid * (retentionPercent / 100);
+      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
+
+      setCancellationData({
+        quotaId,
+        quotaNumber: quota.number,
+        totalPaid,
+        retentionPercent,
+        retentionValue,
+        suggestedRefund
+      });
+      setManualRefundValue(suggestedRefund);
+      setShowResaleModal(quotaId);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao carregar dados para revenda');
+    }
+  };
+
+  const handleResale = async () => {
+    if (!tenantId || !product || !cancellationData || !newOwnerId) return;
+    if (!cancellationReason) return alert('Por favor, informe o motivo da revenda.');
+    
+    setIsProcessingResale(true);
+    try {
+      const { quotaId, totalPaid, retentionValue } = cancellationData;
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const quota = quotas.find(q => q.id === quotaId);
+      const newOwner = clients.find(c => c.id === newOwnerId);
+      if (!newOwner) throw new Error('Novo cotista não encontrado');
+
+      // 1. Update Quota
+      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
+      batch.update(quotaRef, {
+        status: 'sold',
+        is_paid: false,
+        owner_id: newOwner.id,
+        owner_name: newOwner.name,
+        owner_cpf: newOwner.cpf || '',
+        sold_at: now
+      });
+
+      // 2. Mark pending installments of previous owner as cancelled
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const qPending = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'pending'));
+      const snapshotPending = await getDocs(qPending);
+      snapshotPending.docs.forEach(d => {
+        batch.update(d.ref, { status: 'cancelled', cancelled_at: now, reason: 'Revenda de cota' });
+      });
+
+      // 3. Create Refund Installment for previous owner
+      if (manualRefundValue > 0) {
+        const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(refundRef, {
+          quota_id: quotaId,
+          quota_number: cancellationData.quotaNumber,
+          product_id: product.id,
+          product_name: product.name,
+          owner_id: quota?.owner_id || '',
+          owner_name: quota?.owner_name || '',
+          owner_cpf: quota?.owner_cpf || '',
+          amount: -manualRefundValue,
+          status: 'refund',
+          reason: `Reembolso por revenda de cota: ${cancellationReason}`,
+          proof_url: cancellationProofUrl || '',
+          paid_at: now,
+          due_date: now.split('T')[0],
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 3.1 Create Retention Record
+      if (retentionValue > 0) {
+        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(retentionRef, {
+          quota_id: quotaId,
+          quota_number: cancellationData.quotaNumber,
+          product_id: product.id,
+          product_name: product.name,
+          owner_id: quota?.owner_id || '',
+          owner_name: quota?.owner_name || '',
+          amount: retentionValue,
+          status: 'retention',
+          reason: `Retenção por revenda: ${cancellationReason}`,
+          paid_at: now,
+          due_date: now.split('T')[0],
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 4. Create new installments for the NEW owner
+      const installmentDates = getInstallmentDates(installmentCount);
+      const amountPerInstallment = quota!.price / installmentCount;
+      
+      installmentDates.forEach((date, i) => {
+        const instRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(instRef, {
+          product_id: product.id,
+          product_name: product.name,
+          quota_id: quotaId,
+          quota_number: quota!.number,
+          owner_id: newOwner.id,
+          owner_name: newOwner.name,
+          owner_cpf: newOwner.cpf || '',
+          amount: amountPerInstallment,
+          due_date: date.toISOString().split('T')[0],
+          status: 'pending',
+          createdAt: serverTimestamp()
+        });
+      });
+
+      // 5. Ownership History entries
+      const previousOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
+      batch.set(previousOwnerLogRef, {
+        user_id: quota?.owner_id || '',
+        user_name: quota?.owner_name || '',
+        joined_at: quota?.sold_at || now,
+        left_at: now,
+        exit_type: 'resale',
+        financial: {
+          total_paid: totalPaid,
+          retention_value: retentionValue,
+          refund_value: manualRefundValue
+        }
+      });
+
+      const nextOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
+      batch.set(nextOwnerLogRef, {
+        user_id: newOwner.id,
+        user_name: newOwner.name,
+        joined_at: now
+      });
+
+      // 6. Audit Log
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'REVENDA_COTA',
+        details: `Revenda da cota #${cancellationData.quotaNumber} de ${quota?.owner_name} para ${newOwner.name}.`,
+        financial: {
+          previous_owner_paid: totalPaid,
+          retention: retentionValue,
+          refund: manualRefundValue
+        },
+        quota_id: quotaId,
+        previous_owner_id: quota?.owner_id || '',
+        new_owner_id: newOwner.id,
+        created_at: serverTimestamp()
+      });
+
+      await batch.commit();
+      alert('Cota revendida com sucesso!');
+      setShowResaleModal(null);
+      setCancellationData(null);
+      setNewOwnerId('');
+      setCancellationReason('');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao processar revenda');
+    } finally {
+      setIsProcessingResale(false);
+    }
+  };
+
+  const handleCancelParticipation = async () => {
+    if (!tenantId || !product || !cancellationData) return;
+    if (!cancellationReason) return alert('Por favor, informe o motivo do cancelamento.');
+    
+    setIsProcessingCancellation(true);
+    try {
+      const { quotaId, totalPaid, retentionValue } = cancellationData;
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+
+      const quota = quotas.find(q => q.id === quotaId);
+
+      // 1. Update Quota
+      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
+      batch.update(quotaRef, {
+        status: 'available',
+        owner_id: deleteField(),
+        owner_name: deleteField(),
+        owner_cpf: deleteField(),
+        sold_at: deleteField(),
+        is_paid: deleteField()
+      });
+
+      // 2. Mark pending installments as cancelled
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'pending'));
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach(d => {
+        batch.update(d.ref, { status: 'cancelled', cancelled_at: now });
+      });
+
+      // 3. Create Refund Installment (to balance totals)
+      if (manualRefundValue > 0) {
+        const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(refundRef, {
+          quota_id: quotaId,
+          quota_number: cancellationData.quotaNumber,
+          product_id: product.id,
+          product_name: product.name,
+          owner_id: quota?.owner_id || '',
+          owner_name: quota?.owner_name || '',
+          owner_cpf: quota?.owner_cpf || '',
+          amount: -manualRefundValue,
+          status: 'refund',
+          reason: `Reembolso de cancelamento: ${cancellationReason}`,
+          proof_url: cancellationProofUrl || '',
+          paid_at: now,
+          due_date: now.split('T')[0],
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 3.1 Create Retention Record
+      if (retentionValue > 0) {
+        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(retentionRef, {
+          quota_id: quotaId,
+          quota_number: cancellationData.quotaNumber,
+          product_id: product.id,
+          product_name: product.name,
+          owner_id: quota?.owner_id || '',
+          owner_name: quota?.owner_name || '',
+          amount: retentionValue,
+          status: 'retention',
+          reason: `Retenção administrativa: ${cancellationReason}`,
+          paid_at: now,
+          due_date: now.split('T')[0],
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // 4. Ownership History Entry (End of current)
+      const previousOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
+      batch.set(previousOwnerLogRef, {
+        user_id: quota?.owner_id || '',
+        user_name: quota?.owner_name || '',
+        joined_at: quota?.sold_at || now,
+        left_at: now,
+        exit_type: 'cancellation',
+        financial: {
+          total_paid: totalPaid,
+          retention_value: retentionValue,
+          refund_value: manualRefundValue
+        }
+      });
+
+      // 5. Create Cancellation Audit
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'CANCELAR_PARTICIPACAO',
+        details: `Cancelamento da cota #${cancellationData.quotaNumber} do produto ${product.name}. Motivo: ${cancellationReason}`,
+        financial: {
+          total_paid: totalPaid,
+          retention_value: retentionValue,
+          refund_value: manualRefundValue,
+          refund_proof_url: cancellationProofUrl || ''
+        },
+        quota_id: quotaId,
+        previous_owner_id: quota?.owner_id || '',
+        previous_owner_name: quota?.owner_name || '',
+        created_at: serverTimestamp()
+      });
+
+      // Update product counts
+      const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+      batch.update(productRef, {
+        sold_quotas: increment(-1),
+        available_quotas: increment(1)
+      });
+
+      await batch.commit();
+      alert('Participação cancelada com sucesso!');
+      setShowCancellationModal(null);
+      setCancellationData(null);
+      setCancellationReason('');
+      setCancellationProofUrl('');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao processar cancelamento');
+    } finally {
+      setIsProcessingCancellation(false);
+    }
+  };
+
+  const handleCloseProduct = async () => {
+    if (!tenantId || !product) return;
+    setIsClosingProduct(true);
+    try {
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+      
+      batch.update(productRef, {
+        status: 'closed',
+        closed_at: now,
+        closed_by_id: user?.id,
+        closed_by_name: user?.name
+      });
+
+      // Snapshot of cotistas and quotas
+      const snapshotRef = doc(collection(db, 'tenants', tenantId, 'closing_snapshots'));
+      const activeQuotas = quotas.filter(q => q.status === 'sold');
+      batch.set(snapshotRef, {
+        product_id: product.id,
+        product_name: product.name,
+        closed_at: now,
+        closed_by_id: user?.id,
+        closed_by_name: user?.name,
+        quotas_snapshot: activeQuotas.map(q => ({
+          number: q.number,
+          owner_name: q.owner_name,
+          owner_id: q.owner_id,
+          price: q.price,
+          is_paid: q.is_paid || false
+        })),
+        total_collected: activeQuotas.reduce((sum, q) => sum + (q.is_paid ? q.price : 0), 0),
+        total_pending: activeQuotas.reduce((sum, q) => sum + (!q.is_paid ? q.price : 0), 0)
+      });
+
+      // Audit Log
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'FECHAR_PRODUTO',
+        details: `Fechamento definitivo do produto ${product.name}.`,
+        product_id: product.id,
+        created_at: serverTimestamp()
+      });
+
+      await batch.commit();
+      alert('Produto encerrado oficialmente!');
+      setShowCloseModal(false);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao fechar produto');
+    } finally {
+      setIsClosingProduct(false);
+    }
+  };
+
+  const [showStandaloneRefundModal, setShowStandaloneRefundModal] = useState<string | null>(null);
+  const [standaloneRefundReason, setStandaloneRefundReason] = useState('');
+  
+  const handleStandaloneRefund = async () => {
+    if (!tenantId || !product || !cancellationData) return;
+    if (!standaloneRefundReason) return alert('Por favor, informe o motivo do estorno.');
+    
+    setIsProcessingCancellation(true);
+    try {
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const quota = quotas.find(q => q.id === cancellationData.quotaId);
+
+      // Create Refund Record
+      const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+      batch.set(refundRef, {
+        quota_id: cancellationData.quotaId,
+        quota_number: cancellationData.quotaNumber,
+        product_id: product.id,
+        product_name: product.name,
+        owner_id: quota?.owner_id || '',
+        owner_name: quota?.owner_name || '',
+        amount: -manualRefundValue,
+        status: 'refund',
+        reason: standaloneRefundReason,
+        proof_url: cancellationProofUrl || '',
+        paid_at: now,
+        due_date: now.split('T')[0],
+        createdAt: serverTimestamp()
+      });
+
+      // Create Retention if applicable
+      const calculatedRetained = cancellationData.totalPaid - manualRefundValue;
+      if (calculatedRetained > 0) {
+        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        batch.set(retentionRef, {
+          quota_id: cancellationData.quotaId,
+          quota_number: cancellationData.quotaNumber,
+          product_id: product.id,
+          product_name: product.name,
+          owner_id: quota?.owner_id || '',
+          owner_name: quota?.owner_name || '',
+          amount: calculatedRetained,
+          status: 'retention',
+          reason: `Retenção vinculada ao estorno: ${standaloneRefundReason}`,
+          paid_at: now,
+          due_date: now.split('T')[0],
+          createdAt: serverTimestamp()
+        });
+      }
+
+      // Audit Log
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'ESTORNO_MANUAL',
+        details: `Estorno de ${manualRefundValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrado para ${quota?.owner_name} (Cota #${cancellationData.quotaNumber}).`,
+        quota_id: cancellationData.quotaId,
+        created_at: serverTimestamp()
+      });
+
+      await batch.commit();
+      alert('Estorno registrado com sucesso!');
+      setShowStandaloneRefundModal(null);
+      setCancellationData(null);
+      setStandaloneRefundReason('');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao registrar estorno');
+    } finally {
+      setIsProcessingCancellation(false);
+    }
+  };
+
+  const openStandaloneRefundModal = async (quotaId: string) => {
+    if (!tenantId || !product) return;
+    if (product.status === 'closed') return alert('Este produto está encerrado. Nenhuma alteração é permitida.');
+    const quota = quotas.find(q => q.id === quotaId);
+    if (!quota) return;
+
+    try {
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'paid'));
+      const snapshot = await getDocs(q);
+      
+      const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
+      const retentionPercent = product.retention_percent || 0;
+      const retentionValue = totalPaid * (retentionPercent / 100);
+      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
+
+      setCancellationData({
+        quotaId,
+        quotaNumber: quota.number,
+        totalPaid,
+        retentionPercent,
+        retentionValue,
+        suggestedRefund
+      });
+      setManualRefundValue(suggestedRefund);
+      setShowStandaloneRefundModal(quotaId);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao carregar dados');
+    }
+  };
+
+  const generateFinalReport = async () => {
+    if (!product || !tenantId) return;
+    
+    try {
+      const doc = new jsPDF();
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 14;
+      let cursorY = 20;
+
+      doc.setFontSize(18);
+      doc.setFont("helvetica", "bold");
+      doc.text("RELATÓRIO FINAL DE FECHAMENTO", pageWidth / 2, cursorY, { align: 'center' });
+      cursorY += 15;
+
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Produto: ${product.name}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Data de Fechamento: ${product.closed_at ? new Date(product.closed_at).toLocaleString('pt-BR') : 'N/A'}`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Responsável: ${product.closed_by_name || 'Sistema'}`, margin, cursorY);
+      cursorY += 15;
+
+      // Table of Cotistas
+      const soldQuotas = quotas.filter(q => q.status === 'sold');
+      const tableData = soldQuotas.map(q => [
+        q.number,
+        q.owner_name,
+        q.owner_cpf || 'N/A',
+        q.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+        q.is_paid ? 'QUITADO' : 'PENDENTE'
+      ]);
+
+      (doc as any).autoTable({
+        startY: cursorY,
+        head: [['Cota', 'Cotista', 'CPF', 'Valor', 'Status']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [20, 20, 20] },
+      });
+
+      const finalY = (doc as any).lastAutoTable.finalY + 20;
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text("Resumo Financeiro:", margin, finalY);
+      doc.setFontSize(12);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Total de Cotas: ${product.total_quotas}`, margin, finalY + 10);
+      doc.text(`Cotas Vendidas: ${product.sold_quotas}`, margin, finalY + 17);
+      doc.text(`Valor Bruto Vendido: ${soldQuotas.reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, finalY + 24);
+
+      doc.save(`relatorio_final_${product.name.replace(/\s+/g, '_')}.pdf`);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao gerar relatório final');
+    }
+  };
+
+  const openHistoryModal = async (quotaId: string) => {
+    if (!tenantId) return;
+    try {
+      const historyRef = collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history');
+      const q = query(historyRef, orderBy('joined_at', 'desc'));
+      const snapshot = await getDocs(q);
+      setQuotaHistory(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as OwnershipHistory)));
+      setShowHistoryModal(quotaId);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao carregar histórico da cota');
+    }
+  };
 
   const handleBuy = async () => {
+    if (product?.status === 'closed') return alert('Este produto está encerrado. Nenhuma nova venda é permitida.');
     if (selectedQuotas.length === 0) return;
     const count = getDynamicInstallmentCount();
     if (count === 0) {
@@ -3271,6 +3950,14 @@ function ProductDetail() {
             status: 'sold',
             is_paid: false,
             sold_at: now.toISOString()
+          });
+
+          // Ownership History Entry (New)
+          const historyEntryRef = doc(collection(db, 'tenants', tenantId, 'quotas', qId, 'ownership_history'));
+          batch.set(historyEntryRef, {
+            user_id: user.id,
+            user_name: user.name,
+            joined_at: now.toISOString()
           });
 
           // Create installments based on user selection and new rules
@@ -3567,7 +4254,10 @@ function ProductDetail() {
     description: '', 
     image_url: '', 
     expiration_month: '',
-    payment_type: 'installments' as 'cash' | 'installments'
+    payment_type: 'installments' as 'cash' | 'installments' | 'recurrent',
+    default_rule_type: 'percentage_of_paid',
+    retention_percent: 25,
+    allow_manual_adjustment: true
   });
 
   useEffect(() => {
@@ -3577,13 +4267,17 @@ function ProductDetail() {
         description: product.description, 
         image_url: product.image_url || '',
         expiration_month: product.expiration_month || '',
-        payment_type: product.payment_type || 'installments'
+        payment_type: product.payment_type || 'installments',
+        default_rule_type: product.default_rule_type || 'percentage_of_paid',
+        retention_percent: product.retention_percent || 25,
+        allow_manual_adjustment: product.allow_manual_adjustment ?? true
       });
     }
   }, [product]);
 
   const handleUpdateProduct = async () => {
     if (!tenantId || !id) return;
+    if (product?.status === 'closed') return alert('Este produto está encerrado. Edições não são permitidas.');
 
     // Validação de parcelamento se o tipo for parcelado
     if (editedProduct.payment_type === 'installments') {
@@ -3646,15 +4340,38 @@ function ProductDetail() {
             <ArrowLeft size={20} />
           </button>
           <h2 className="text-3xl font-bold tracking-tight">{product.name}</h2>
+          {product.status === 'closed' && (
+            <span className="px-3 py-1 bg-red-100 text-red-600 rounded-full text-[10px] font-black uppercase tracking-widest border border-red-200">
+              Encerrado Oficialmente
+            </span>
+          )}
         </div>
-        {user.role === 'admin' && (
-          <button 
-            onClick={() => setIsEditing(!isEditing)}
-            className="px-4 py-2 bg-black text-white rounded-xl text-sm font-bold"
-          >
-            {isEditing ? 'Cancelar Edição' : 'Editar Produto'}
-          </button>
-        )}
+        <div className="flex gap-2">
+          {product.status === 'closed' && (
+            <button 
+              onClick={generateFinalReport}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-emerald-700 transition-all cursor-pointer"
+            >
+              <Download size={18} /> Relatório de Fechamento
+            </button>
+          )}
+          {user.role === 'admin' && product.status !== 'closed' && (
+            <>
+              <button 
+                onClick={() => setShowCloseModal(true)}
+                className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-red-700 transition-all cursor-pointer"
+              >
+                <X size={18} /> Encerrar Produto
+              </button>
+              <button 
+                onClick={() => setIsEditing(!isEditing)}
+                className="px-4 py-2 bg-black text-white rounded-xl text-sm font-bold transition-all"
+              >
+                {isEditing ? 'Cancelar Edição' : 'Editar Produto'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {isEditing && (
@@ -3696,10 +4413,11 @@ function ProductDetail() {
                     <select 
                       className="w-full p-4 bg-black/5 rounded-2xl mt-1"
                       value={editedProduct.payment_type}
-                      onChange={e => setEditedProduct({...editedProduct, payment_type: e.target.value as 'cash' | 'installments'})}
+                      onChange={e => setEditedProduct({...editedProduct, payment_type: e.target.value as any})}
                     >
                       <option value="installments">Parcelado</option>
                       <option value="cash">À Vista</option>
+                      <option value="recurrent">Recorrente (Mensal Fixo)</option>
                     </select>
                   </div>
                   <div className="relative">
@@ -3713,6 +4431,48 @@ function ProductDetail() {
                   </div>
                 </div>
               </div>
+
+              {/* Regra de Inadimplência na Edição */}
+              <div className="p-6 bg-black/5 rounded-3xl space-y-4">
+                <h4 className="text-sm font-bold uppercase tracking-widest opacity-40">Regra de Inadimplência</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Tipo de Retenção</label>
+                    <select 
+                      className="w-full p-4 bg-white rounded-xl mt-1 text-sm outline-none"
+                      value={editedProduct.default_rule_type}
+                      onChange={e => setEditedProduct({...editedProduct, default_rule_type: e.target.value as any})}
+                    >
+                      <option value="percentage_of_paid">Perc. sobre valor pago</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Percentual (%)</label>
+                    <input 
+                      className="w-full p-4 bg-white rounded-xl mt-1 text-sm outline-none" 
+                      type="number"
+                      value={editedProduct.retention_percent}
+                      onChange={e => setEditedProduct({...editedProduct, retention_percent: Number(e.target.value)})}
+                    />
+                  </div>
+                </div>
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className={cn(
+                    "w-5 h-5 rounded-md border-2 flex items-center justify-center transition-all",
+                    editedProduct.allow_manual_adjustment ? "bg-black border-black" : "border-black/20 group-hover:border-black/40"
+                  )}>
+                    {editedProduct.allow_manual_adjustment && <Check size={14} className="text-white" />}
+                  </div>
+                  <input 
+                    type="checkbox" 
+                    className="hidden" 
+                    checked={editedProduct.allow_manual_adjustment}
+                    onChange={e => setEditedProduct({...editedProduct, allow_manual_adjustment: e.target.checked})}
+                  />
+                  <span className="text-sm font-medium">Permitir ajuste manual pelo administrador</span>
+                </label>
+              </div>
+
               <textarea 
                 className="w-full p-4 bg-black/5 rounded-2xl h-32" 
                 placeholder="Descrição detalhada" 
@@ -3784,7 +4544,7 @@ function ProductDetail() {
                         prev.includes(quota.id) ? prev.filter(x => x !== quota.id) : [...prev, quota.id]
                       );
                     } else if (quota.status === 'sold' && user.role === 'admin') {
-                      handleCancelSale(quota.id);
+                      setShowQuotaMenu(quota.id);
                     } else if (quota.status === 'defaulted' && user.role === 'admin') {
                       handleResetDefaultedQuota(quota.id);
                     }
@@ -4005,6 +4765,604 @@ function ProductDetail() {
                       </div>
                     </>
                   )}
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showQuotaMenu && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowQuotaMenu(null)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-sm bg-white rounded-[40px] p-10 shadow-2xl space-y-4"
+                >
+                  <h3 className="text-xl font-bold text-center">Ações na Cota</h3>
+                  <div className="space-y-3">
+                    <button 
+                      onClick={() => {
+                        setShowQuotaMenu(null);
+                        openHistoryModal(showQuotaMenu);
+                      }}
+                      className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-black/10 transition-all border border-black/5"
+                    >
+                      <History size={18} /> Ver Histórico de Posse
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowQuotaMenu(null);
+                        openResaleModal(showQuotaMenu);
+                      }}
+                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                    >
+                      <RefreshCw size={20} /> Revender Cota (Transferência)
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowQuotaMenu(null);
+                        openStandaloneRefundModal(showQuotaMenu);
+                      }}
+                      className="w-full py-4 bg-amber-600/10 text-amber-600 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-amber-600/20 transition-all border border-amber-600/10"
+                    >
+                      <RefreshCw size={18} /> Registrar Estorno / Devolução
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setShowQuotaMenu(null);
+                        openCancellationModal(showQuotaMenu);
+                      }}
+                      className="w-full py-4 bg-red-600/10 text-red-600 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-red-600/20 transition-all"
+                    >
+                      <Trash2 size={20} /> Cancelar Participação
+                    </button>
+                    <div className="pt-2">
+                      <button 
+                        onClick={() => setShowQuotaMenu(null)}
+                        className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showHistoryModal && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowHistoryModal(null)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-2xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                >
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-2xl font-bold">Histórico de Posse</h3>
+                    <p className="text-sm font-mono opacity-40">Cota #{quotas.find(q => q.id === showHistoryModal)?.number}</p>
+                  </div>
+
+                  <div className="space-y-6">
+                    {quotaHistory.length === 0 && (
+                      <div className="p-12 text-center text-black/30 bg-black/5 rounded-3xl">
+                        Nenhum histórico registrado para esta cota ainda.
+                      </div>
+                    )}
+                    
+                    <div className="relative space-y-8 before:absolute before:left-6 before:top-4 before:bottom-4 before:w-[2px] before:bg-black/5">
+                      {quotaHistory.map((entry, i) => (
+                        <div key={entry.id} className="relative pl-16">
+                          <div className={cn(
+                            "absolute left-3 top-0 w-6 h-6 rounded-full border-4 border-white shadow-sm transition-all",
+                            i === 0 ? "bg-indigo-600 scale-125" : "bg-black/20"
+                          )} />
+                          
+                          <div className="bg-white border border-black/5 p-6 rounded-3xl space-y-4 hover:border-black/10 transition-all">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-1">Cotista</p>
+                                <p className="font-bold text-lg">{entry.user_name}</p>
+                              </div>
+                              {i === 0 && !entry.left_at ? (
+                                <span className="px-3 py-1 bg-emerald-100 text-emerald-600 rounded-full text-[10px] font-black uppercase">Atual</span>
+                              ) : (
+                                <span className="px-3 py-1 bg-black/5 text-black/40 rounded-full text-[10px] font-black uppercase">{entry.exit_type === 'resale' ? 'Revenda' : 'Cancelado'}</span>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4 text-xs">
+                              <div>
+                                <p className="opacity-40 uppercase font-bold tracking-widest text-[9px]">Entrada</p>
+                                <p className="font-medium">{new Date(entry.joined_at).toLocaleString('pt-BR')}</p>
+                              </div>
+                              {entry.left_at && (
+                                <div>
+                                  <p className="opacity-40 uppercase font-bold tracking-widest text-[9px]">Saída</p>
+                                  <p className="font-medium">{new Date(entry.left_at).toLocaleString('pt-BR')}</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {entry.financial && (
+                              <div className="pt-4 mt-2 border-t border-black/5 grid grid-cols-3 gap-2">
+                                <div>
+                                  <p className="text-[9px] font-bold uppercase opacity-30 mb-1">Pago</p>
+                                  <p className="text-xs font-bold">{entry.financial.total_paid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                </div>
+                                <div className="text-red-500">
+                                  <p className="text-[9px] font-bold uppercase opacity-30 mb-1">Retido</p>
+                                  <p className="text-xs font-bold">-{entry.financial.retention_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                </div>
+                                <div className="text-emerald-600">
+                                  <p className="text-[9px] font-bold uppercase opacity-30 mb-1">Devolvido</p>
+                                  <p className="text-xs font-bold">{entry.financial.refund_value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button 
+                      onClick={() => setShowHistoryModal(null)}
+                      className="w-full py-4 bg-black text-white rounded-2xl font-bold mt-4"
+                    >
+                      Fechar Histórico
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showResaleModal && cancellationData && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowResaleModal(null)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                >
+                  <h3 className="text-2xl font-bold mb-2">Revender Cota (Transferência)</h3>
+                  <p className="text-black/50 mb-6">Cota #{cancellationData.quotaNumber}</p>
+
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-black/5 p-4 rounded-3xl">
+                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Cotista Atual</p>
+                        <p className="font-bold">{quotas.find(q => q.id === showResaleModal)?.owner_name || 'Desconhecido'}</p>
+                      </div>
+                      <div className="bg-black/5 p-4 rounded-3xl">
+                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Total Pago</p>
+                        <p className="font-bold text-emerald-600">{cancellationData.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl">
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="opacity-60">Retenção ({cancellationData.retentionPercent}%)</span>
+                        <span className="font-bold text-red-600">-{cancellationData.retentionValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-bold">
+                        <span>Devolução Sugerida</span>
+                        <span className="text-emerald-700">{cancellationData.suggestedRefund.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
+                    </div>
+
+                    {product?.allow_manual_adjustment && (
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Ajuste Manual da Devolução (R$)</label>
+                        <input 
+                          type="number"
+                          className="w-full p-4 bg-black/5 rounded-2xl font-bold"
+                          value={manualRefundValue}
+                          onChange={(e) => setManualRefundValue(Number(e.target.value))}
+                        />
+                      </div>
+                    )}
+
+                    <div className="pt-4 border-t border-black/5">
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Vincular Novo Cotista *</label>
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
+                          <input 
+                            type="text"
+                            placeholder="Buscar cliente por nome ou email..."
+                            className="w-full pl-12 pr-4 py-4 bg-black/5 rounded-2xl text-sm"
+                            value={searchClient}
+                            onChange={(e) => setSearchClient(e.target.value)}
+                          />
+                        </div>
+                        <div className="max-h-40 overflow-y-auto border border-black/5 rounded-2xl">
+                          {clients
+                            .filter(c => 
+                              c.name.toLowerCase().includes(searchClient.toLowerCase()) || 
+                              c.email.toLowerCase().includes(searchClient.toLowerCase())
+                            )
+                            .map(client => (
+                              <button 
+                                key={client.id}
+                                onClick={() => {
+                                  setNewOwnerId(client.id);
+                                  setSearchClient(client.name);
+                                }}
+                                className={cn(
+                                  "w-full p-4 text-left text-sm transition-all border-b border-black/5 last:border-0 hover:bg-black/5",
+                                  newOwnerId === client.id ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-white"
+                                )}
+                              >
+                                {client.name} ({client.email})
+                              </button>
+                            ))
+                          }
+                          {clients.filter(c => c.name.toLowerCase().includes(searchClient.toLowerCase())).length === 0 && (
+                            <p className="p-8 text-center text-xs text-black/30">Nenhum cliente encontrado.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Nova Condição de Pagamento</label>
+                      <div className="bg-black/5 p-4 rounded-2xl space-y-4">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="opacity-60">Parcelas</span>
+                          <select 
+                            value={installmentCount}
+                            onChange={(e) => setInstallmentCount(Number(e.target.value))}
+                            className="p-2 bg-white rounded-lg outline-none font-bold"
+                          >
+                            {Array.from({ length: dynamicInstallmentCount }, (_, i) => (
+                              <option key={i+1} value={i+1}>{i+1}x</option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="text-[10px] opacity-40 italic">O novo cotista assumirá o débito total da cota distribuído nas parcelas acima.</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Motivo da Revenda *</label>
+                      <textarea 
+                        className="w-full p-4 bg-black/5 rounded-2xl h-24 text-sm outline-none"
+                        placeholder="Ex: Transferência administrativa, inadimplência técnica..."
+                        value={cancellationReason}
+                        onChange={(e) => setCancellationReason(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="flex gap-4 pt-4 font-serif">
+                      <button 
+                        onClick={() => setShowResaleModal(null)}
+                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                      >
+                        Voltar
+                      </button>
+                      <button 
+                        onClick={handleResale}
+                        disabled={isProcessingResale || !newOwnerId || !cancellationReason}
+                        className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isProcessingResale ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Revenda Atômica'}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showCloseModal && product && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowCloseModal(false)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl space-y-6"
+                >
+                  <div className="text-center">
+                    <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                      <Shield size={40} />
+                    </div>
+                    <h3 className="text-2xl font-bold">Encerrar Produto Oficialmente?</h3>
+                    <p className="text-black/50 text-sm mt-2">
+                      Esta ação bloqueará definitivamente novas vendas, edições, cancelamentos ou revendas para este produto.
+                    </p>
+                  </div>
+
+                  <div className="bg-black/5 p-6 rounded-3xl space-y-4">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="opacity-50">Cotas Vendidas</span>
+                      <span className="font-bold">{product.sold_quotas} / {product.total_quotas}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="opacity-50">Total Arrecadado</span>
+                      <span className="font-bold text-emerald-600">
+                        {quotas.filter(q => q.status === 'sold' && q.is_paid).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="opacity-50">Participantes Ativos</span>
+                      <span className="font-bold">{new Set(quotas.filter(q => q.status === 'sold').map(q => q.owner_id)).size}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3">
+                    <Info size={18} className="text-red-600 flex-shrink-0" />
+                    <p className="text-[10px] text-red-700 leading-tight">
+                      <strong>ATENÇÃO:</strong> Esta ação é irreversível e cria um marco de segurança imutável para a realização da aposta.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => setShowCloseModal(false)}
+                      className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold"
+                    >
+                      Voltar
+                    </button>
+                    <button 
+                      onClick={handleCloseProduct}
+                      disabled={isClosingProduct}
+                      className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-neutral-900 transition-all flex items-center justify-center gap-2"
+                    >
+                      {isClosingProduct ? <RefreshCw className="animate-spin" size={20} /> : 'Confirmar Fechamento Definitivo'}
+                    </button>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showStandaloneRefundModal && cancellationData && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowStandaloneRefundModal(null)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                >
+                  <h3 className="text-2xl font-bold mb-2">Registrar Devolução Financeira</h3>
+                  <p className="text-black/50 mb-6">Controle avulso para a Cota #{cancellationData.quotaNumber}</p>
+
+                  <div className="space-y-6 text-sm">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-black/5 p-4 rounded-3xl">
+                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Cotista</p>
+                        <p className="font-bold">{quotas.find(q => q.id === showStandaloneRefundModal)?.owner_name || 'Desconhecido'}</p>
+                      </div>
+                      <div className="bg-black/5 p-4 rounded-3xl">
+                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Total Já Pago</p>
+                        <p className="font-bold text-emerald-600">{cancellationData.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-center gap-3">
+                      <Info size={18} className="text-amber-600" />
+                      <p className="text-xs text-amber-700 leading-relaxed font-bold">
+                        Esta ação registra um estorno/devolução de valor. <br/>
+                        <span className="opacity-70 font-normal underline">Diferente do cancelamento, esta ação não retira a posse do cotista atual.</span>
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Retenção Sugerida ({cancellationData.retentionPercent}%)</label>
+                        <div className="p-4 bg-black/5 rounded-2xl font-bold opacity-50">
+                          {cancellationData.retentionValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Valor a Devolver (R$) *</label>
+                        <input 
+                          type="number"
+                          className="w-full p-4 bg-black/5 rounded-2xl font-bold border-2 border-transparent focus:border-indigo-600 transition-all outline-none"
+                          value={manualRefundValue}
+                          max={cancellationData.totalPaid}
+                          onChange={(e) => setManualRefundValue(Number(e.target.value))}
+                        />
+                      </div>
+                    </div>
+
+                    {manualRefundValue > cancellationData.totalPaid && (
+                      <p className="text-[10px] text-red-500 font-bold">* O valor da devolução não pode exceder o total pago ({cancellationData.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}).</p>
+                    )}
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Comprovante de Devolução (Opcional)</label>
+                      <input 
+                        type="text"
+                        placeholder="Link do comprovante ou ID da transação Pix..."
+                        className="w-full p-4 bg-black/5 rounded-2xl text-xs outline-none"
+                        value={cancellationProofUrl}
+                        onChange={(e) => setCancellationProofUrl(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Motivo do Estorno *</label>
+                      <textarea 
+                        className="w-full p-4 bg-black/5 rounded-2xl h-24 text-xs outline-none"
+                        placeholder="Ex: Pagamento duplicado, devolução parcial autorizada..."
+                        value={standaloneRefundReason}
+                        onChange={(e) => setStandaloneRefundReason(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div className="flex gap-4 pt-4">
+                      <button 
+                        onClick={() => setShowStandaloneRefundModal(null)}
+                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                      >
+                        Cancelar
+                      </button>
+                      <button 
+                        onClick={handleStandaloneRefund}
+                        disabled={isProcessingCancellation || !standaloneRefundReason || manualRefundValue <= 0 || manualRefundValue > cancellationData.totalPaid}
+                        className="flex-[2] py-4 bg-black text-white rounded-2xl font-bold hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isProcessingCancellation ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Devolução'}
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showCancellationModal && cancellationData && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowCancellationModal(null)}
+                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                  animate={{ scale: 1, opacity: 1, y: 0 }}
+                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
+                  className="relative w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                >
+                  <h3 className="text-2xl font-bold mb-2">Cancelar Participação</h3>
+                  <p className="text-black/50 mb-8">Cota #{cancellationData.quotaNumber}</p>
+
+                  <div className="space-y-6">
+                    <div className="bg-black/5 p-6 rounded-3xl space-y-3">
+                      <div className="flex justify-between text-sm">
+                        <span className="opacity-60">Total Pago</span>
+                        <span className="font-bold">{cancellationData.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-red-600">
+                        <span className="opacity-80">Valor de Retenção ({cancellationData.retentionPercent}%)</span>
+                        <span className="font-bold">-{cancellationData.retentionValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
+                      <div className="pt-3 border-t border-black/10 flex justify-between items-center">
+                        <span className="font-bold">Valor Sugerido para Devolução</span>
+                        <span className="text-xl font-bold text-emerald-600">{cancellationData.suggestedRefund.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
+                    </div>
+
+                    {product?.allow_manual_adjustment && (
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Ajuste Manual do Valor a Devolver (R$)</label>
+                        <input 
+                          type="number"
+                          className="w-full p-4 bg-black/5 rounded-2xl font-bold"
+                          value={manualRefundValue}
+                          onChange={(e) => setManualRefundValue(Number(e.target.value))}
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Motivo do Cancelamento *</label>
+                      <textarea 
+                        className="w-full p-4 bg-black/5 rounded-2xl h-24 text-sm outline-none"
+                        placeholder="Descreva o motivo da rescisão..."
+                        value={cancellationReason}
+                        onChange={(e) => setCancellationReason(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Comprovante de Devolução (Opcional)</label>
+                      <div className="relative group">
+                        <input 
+                          type="text"
+                          className="w-full p-4 bg-black/5 rounded-2xl text-xs pr-12 truncate"
+                          placeholder="Cole o link ou clique para subir imagem"
+                          value={cancellationProofUrl}
+                          onChange={(e) => setCancellationProofUrl(e.target.value)}
+                        />
+                        <label className="absolute right-4 top-1/2 -translate-y-1/2 cursor-pointer hover:text-indigo-600 transition-colors">
+                          <ImagePlus size={20} />
+                          <input 
+                            type="file" 
+                            className="hidden" 
+                            accept="image/*"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onloadend = () => setCancellationProofUrl(reader.result as string);
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                      {cancellationProofUrl && (
+                        <div className="mt-2 text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                          <Check size={12} /> Comprovante anexado
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-4 pt-4 font-serif">
+                      <button 
+                        onClick={() => setShowCancellationModal(null)}
+                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                      >
+                        Voltar
+                      </button>
+                      <button 
+                        onClick={handleCancelParticipation}
+                        disabled={isProcessingCancellation || !cancellationReason}
+                        className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isProcessingCancellation ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Cancelamento'}
+                      </button>
+                    </div>
+                  </div>
                 </motion.div>
               </div>
             )}
@@ -5107,6 +6465,283 @@ function TermsPage() {
   );
 }
 
+function FinancialConsole() {
+  const { tenantId } = React.useContext(AuthContext)!;
+  const [data, setData] = useState<{
+    collected: number;
+    refunded: number;
+    retained: number;
+    net: number;
+    items: any[];
+  }>({ collected: 0, refunded: 0, retained: 0, net: 0, items: [] });
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [clients, setClients] = useState<User[]>([]);
+  
+  const [filterProduct, setFilterProduct] = useState('all');
+  const [filterClient, setFilterClient] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  useEffect(() => {
+    if (!tenantId) return;
+    const fetchBaseData = async () => {
+      const pSnapshot = await getDocs(collection(db, 'tenants', tenantId, 'products'));
+      setProducts(pSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product)));
+      
+      const cSnapshot = await getDocs(query(collection(db, 'tenants', tenantId, 'users'), where('role', '==', 'client')));
+      setClients(cSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as User)));
+    };
+    fetchBaseData();
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    setLoading(true);
+    
+    const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+    let q = query(installmentsRef, where('status', 'in', ['paid', 'refund', 'retention']));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const rawItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Installment));
+      
+      // Apply filters in memory for more flexibility with combined conditions if needed, 
+      // but let's try to do what we can.
+      let filtered = rawItems.filter(item => {
+        if (filterProduct !== 'all' && item.product_id !== filterProduct) return false;
+        if (filterClient !== 'all' && item.owner_id !== filterClient) return false;
+        if (startDate && item.paid_at && item.paid_at < startDate) return false;
+        if (endDate && item.paid_at && item.paid_at > endDate + 'T23:59:59') return false;
+        return true;
+      });
+
+      // Sort by date desc
+      filtered.sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
+
+      const collected = filtered.filter(i => i.status === 'paid').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      const refunded = filtered.filter(i => i.status === 'refund').reduce((acc, i) => acc + Math.abs(Number(i.amount) || 0), 0);
+      const retained = filtered.filter(i => i.status === 'retention').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      
+      setData({
+        collected,
+        refunded,
+        retained,
+        net: collected - refunded,
+        items: filtered
+      });
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [tenantId, filterProduct, filterClient, startDate, endDate]);
+
+  const chartData = useMemo(() => {
+    const dailyData: { [key: string]: number } = {};
+    data.items.forEach(item => {
+      if (item.status === 'paid') {
+        const date = item.paid_at ? item.paid_at.split('T')[0] : '';
+        if (date) {
+          dailyData[date] = (dailyData[date] || 0) + (Number(item.amount) || 0);
+        }
+      }
+    });
+
+    return Object.entries(dailyData)
+      .map(([date, amount]) => ({
+        rawDate: date,
+        date: new Date(date + 'T12:00:00').toLocaleDateString('pt-BR'),
+        amount
+      }))
+      .sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+  }, [data.items]);
+
+  const exportToCSV = () => {
+    const headers = ['Data', 'Tipo', 'Produto', 'Cotista', 'Valor', 'Motivo'];
+    const rows = data.items.map(i => [
+      i.paid_at ? new Date(i.paid_at).toLocaleDateString() : '-',
+      i.status === 'paid' ? 'Pagamento' : i.status === 'refund' ? 'Reembolso' : 'Retenção',
+      i.product_name,
+      i.owner_name,
+      i.amount,
+      i.reason || '-'
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + headers.join(",") + "\n"
+      + rows.map(e => e.join(",")).join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `financeiro_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div className="space-y-8 pb-20">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h2 className="text-3xl font-black tracking-tight text-black">Conferência Financeira</h2>
+          <p className="text-black/40 text-sm font-medium">Consolidado dinâmico dos registros do sistema</p>
+        </div>
+        <button 
+          onClick={exportToCSV}
+          className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+        >
+          <FileDown size={20} /> Exportar Relatório
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <FinanceCard label="Total Arrecadado" value={data.collected} color="text-emerald-600" />
+        <FinanceCard label="Total Devolvido" value={data.refunded} color="text-red-500" />
+        <FinanceCard label="Total Retido" value={data.retained} color="text-amber-600" />
+        <FinanceCard label="Saldo Líquido" value={data.net} color="text-indigo-600" bg="bg-indigo-50" />
+      </div>
+
+      {chartData.length > 0 && (
+        <div className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold">Resumo Coletado por Dia</h3>
+            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Evolução Faturamento</p>
+          </div>
+          <div className="h-[300px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#14141410" />
+                <XAxis 
+                  dataKey="date" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 10, fontWeight: 'bold' }} 
+                  dy={10}
+                />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 10, fontWeight: 'bold' }}
+                  tickFormatter={(val) => `R$ ${val}`}
+                />
+                <Tooltip 
+                  contentStyle={{ borderRadius: '24px', border: 'none', boxShadow: '0 20px 50px rgba(0,0,0,0.1)', padding: '20px' }}
+                  itemStyle={{ fontWeight: 'bold', color: '#141414' }}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="amount" 
+                  name="Coletado"
+                  stroke="#4f46e5" 
+                  strokeWidth={4} 
+                  dot={{ r: 6, fill: '#4f46e5', strokeWidth: 2, stroke: '#fff' }}
+                  activeDot={{ r: 8, strokeWidth: 0 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6">
+        <div className="flex flex-wrap gap-4">
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Produto</label>
+            <select 
+              value={filterProduct} 
+              onChange={e => setFilterProduct(e.target.value)}
+              className="w-full p-4 bg-black/5 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-indigo-600 transition-all text-sm"
+            >
+              <option value="all">Todos os Produtos</option>
+              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Cotista</label>
+            <select 
+              value={filterClient} 
+              onChange={e => setFilterClient(e.target.value)}
+              className="w-full p-4 bg-black/5 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-indigo-600 transition-all text-sm"
+            >
+              <option value="all">Todos os Cotistas</option>
+              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="flex-1 min-w-[150px]">
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data Início</label>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-4 bg-black/5 rounded-2xl text-sm font-bold" />
+          </div>
+          <div className="flex-1 min-w-[150px]">
+            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data Fim</label>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-4 bg-black/5 rounded-2xl text-sm font-bold" />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="text-left border-b border-black/5">
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Data</th>
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Tipo</th>
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Produto</th>
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Cotista</th>
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4 text-right">Valor</th>
+                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Referência</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} className="py-20 text-center opacity-20">Carregando registros financeiros...</td></tr>
+              ) : data.items.map((item) => (
+                <tr key={item.id} className="border-b border-black/5 hover:bg-black/[0.02] transition-all group">
+                  <td className="py-4 px-4 text-xs font-medium opacity-60">
+                    {item.paid_at ? new Date(item.paid_at).toLocaleDateString() : '-'}
+                  </td>
+                  <td className="py-4 px-4">
+                    <span className={cn(
+                      "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                      item.status === 'paid' ? "bg-emerald-100 text-emerald-600" : 
+                      item.status === 'refund' ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-600"
+                    )}>
+                      {item.status === 'paid' ? 'Pagamento' : item.status === 'refund' ? 'Reembolso' : 'Retenção'}
+                    </span>
+                  </td>
+                  <td className="py-4 px-4 text-xs font-bold">{item.product_name}</td>
+                  <td className="py-4 px-4 text-xs font-bold">{item.owner_name}</td>
+                  <td className={cn(
+                    "py-4 px-4 text-xs font-black text-right",
+                    item.status === 'refund' ? "text-red-500" : "text-black"
+                  )}>
+                    {item.status === 'refund' && '-'}
+                    {Math.abs(item.amount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </td>
+                  <td className="py-4 px-4 text-[10px] opacity-40 max-w-[200px] truncate" title={item.reason || `Cota #${item.quota_number}`}>
+                    {item.reason || `Cota #${item.quota_number}`}
+                  </td>
+                </tr>
+              ))}
+              {!loading && data.items.length === 0 && (
+                <tr><td colSpan={6} className="py-20 text-center opacity-20">Nenhum registro encontrado para estes filtros.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FinanceCard({ label, value, color, bg = "bg-white" }: { label: string, value: number, color: string, bg?: string }) {
+  return (
+    <div className={cn("p-8 rounded-[40px] border border-black/5 shadow-sm space-y-2", bg)}>
+      <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">{label}</p>
+      <p className={cn("text-2xl font-black font-serif", color)}>
+        {value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+      </p>
+    </div>
+  );
+}
+
 function AuditLogs() {
   const [logs, setLogs] = useState<any[]>([]);
   const { tenantId } = React.useContext(AuthContext)!;
@@ -5521,7 +7156,7 @@ function MyPayments({ settings }: { settings: any }) {
       return groups;
     }, {});
 
-  const totalPaid = installments.filter(i => i.status === 'paid').reduce((sum, i) => sum + i.amount, 0);
+  const totalPaid = installments.filter(i => i.status === 'paid' || i.status === 'refund').reduce((sum, i) => sum + i.amount, 0);
   const totalPending = installments.filter(i => i.status === 'pending').reduce((sum, i) => sum + i.amount, 0);
 
   return (
@@ -5596,12 +7231,16 @@ function MyPayments({ settings }: { settings: any }) {
                   <span className={cn(
                     "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
                     inst.status === 'paid' ? "bg-emerald-100 text-emerald-700" : 
+                    inst.status === 'refund' ? "bg-red-100 text-red-700" :
                     (new Date(inst.due_date + 'T23:59:59') < new Date() ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")
                   )}>
-                    {inst.status === 'paid' ? 'Pago' : (new Date(inst.due_date + 'T23:59:59') < new Date() ? 'EM ATRASO' : 'Pendente')}
+                    {inst.status === 'paid' ? 'Pago' : inst.status === 'refund' ? 'ESTORNADO' : (new Date(inst.due_date + 'T23:59:59') < new Date() ? 'EM ATRASO' : 'Pendente')}
                   </span>
                   {inst.paid_at && (
-                    <p className="text-[10px] text-black/30 mt-1">Pago em {new Date(inst.paid_at).toLocaleDateString('pt-BR')}</p>
+                    <p className="text-[10px] text-black/30 mt-1">
+                      {inst.status === 'refund' ? 'Estornado em ' : 'Pago em '}
+                      {new Date(inst.status === 'refund' ? inst.refunded_at : inst.paid_at).toLocaleDateString('pt-BR')}
+                    </p>
                   )}
                 </td>
               </tr>
@@ -5619,45 +7258,120 @@ function MyPayments({ settings }: { settings: any }) {
 }
 
 function PaymentManagement() {
+  const [activeTab, setActiveTab] = useState<'pending' | 'received'>('pending');
   const [pending, setPending] = useState<any[]>([]);
+  const [received, setReceived] = useState<any[]>([]);
+  const [showRefundModal, setShowRefundModal] = useState<string | null>(null);
+  const [refundReason, setRefundReason] = useState('');
   const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
 
   if (user?.role === 'client') return <Navigate to="/my-payments" />;
 
   useEffect(() => {
     if (!tenantId) return;
-    const q = query(collection(db, 'tenants', tenantId, 'installments'), where('status', '==', 'pending'));
+    const q = query(
+      collection(db, 'tenants', tenantId, 'installments'), 
+      where('status', '==', activeTab === 'pending' ? 'pending' : 'paid'),
+      orderBy('paid_at', 'desc'),
+      limit(activeTab === 'received' ? 100 : 1000)
+    );
+    
     return onSnapshot(q, (snapshot) => {
-      const allPending = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      const all = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       
-      // Group by user and due date
-      const groups: { [key: string]: any } = {};
-      allPending.forEach((inst: any) => {
-        const key = `${inst.owner_id}_${inst.due_date}`;
-        if (!groups[key]) {
-          groups[key] = {
-            owner_id: inst.owner_id,
-            owner_name: inst.owner_name || 'Desconhecido',
-            owner_cpf: inst.owner_cpf || 'Não informado',
-            due_date: inst.due_date,
-            product_name: inst.product_name,
-            amount: 0,
-            quota_numbers: [],
-            ids: []
-          };
-        }
-        groups[key].amount += inst.amount;
-        groups[key].quota_numbers.push(inst.quota_number);
-        groups[key].ids.push(inst.id);
+      if (activeTab === 'pending') {
+        const groups: { [key: string]: any } = {};
+        all.forEach((inst: any) => {
+          const key = `${inst.owner_id}_${inst.due_date}`;
+          if (!groups[key]) {
+            groups[key] = {
+              owner_id: inst.owner_id,
+              owner_name: inst.owner_name || 'Desconhecido',
+              owner_cpf: inst.owner_cpf || 'Não informado',
+              due_date: inst.due_date,
+              product_name: inst.product_name,
+              amount: 0,
+              quota_numbers: [],
+              ids: []
+            };
+          }
+          groups[key].amount += inst.amount;
+          groups[key].quota_numbers.push(inst.quota_number);
+          groups[key].ids.push(inst.id);
+        });
+
+        setPending(Object.values(groups).sort((a: any, b: any) => 
+          new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
+        ));
+      } else {
+        setReceived(all);
+      }
+    });
+  }, [tenantId, activeTab]);
+
+  const handleRefundPayment = async () => {
+    if (!tenantId || !showRefundModal || !refundReason.trim()) return;
+    
+    try {
+      const originalDoc = await getDoc(doc(db, 'tenants', tenantId, 'installments', showRefundModal));
+      if (!originalDoc.exists()) return;
+      
+      const originalData = originalDoc.data();
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+
+      // 1. Create Negative Reversal Entry (Linked to original)
+      const reversalRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+      const reversalData = {
+        ...originalData,
+        amount: -originalData.amount,
+        status: 'refund',
+        original_payment_id: showRefundModal,
+        refund_reason: refundReason,
+        refunded_by: user.id,
+        refunded_at: now,
+        is_paid: false,
+        createdAt: serverTimestamp()
+      };
+      // Delete ID if it leaked from original spread
+      delete (reversalData as any).id;
+      batch.set(reversalRef, reversalData);
+
+      // 2. Re-open the debt (Create a new pending installment)
+      const newPendingRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+      const newPendingData = {
+        ...originalData,
+        status: 'pending',
+        paid_at: deleteField(),
+        createdAt: serverTimestamp(),
+        id: deleteField()
+      };
+      batch.set(newPendingRef, newPendingData);
+
+      // 3. Mark the quota as not fully paid
+      const qRef = doc(db, 'tenants', tenantId, 'quotas', originalData.quota_id);
+      batch.update(qRef, { is_paid: false });
+
+      // 4. Audit Log
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      batch.set(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'ESTORNAR_PAGAMENTO',
+        details: `Estornou pagamento ID: ${showRefundModal}. Motivo: ${refundReason}`,
+        created_at: serverTimestamp()
       });
 
-      const sortedGroups = Object.values(groups).sort((a: any, b: any) => 
-        new Date(a.due_date).getTime() - new Date(b.due_date).getTime()
-      );
-
-      setPending(sortedGroups);
-    });
-  }, [tenantId]);
+      await batch.commit();
+      
+      alert('Estorno realizado com sucesso! O histórico foi preservado e o débito foi reaberto.');
+      setShowRefundModal(null);
+      setRefundReason('');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao realizar estorno.');
+    }
+  };
 
   const handleMarkAsPaid = async (ids: string[]) => {
     if (!tenantId) return;
@@ -5729,72 +7443,196 @@ function PaymentManagement() {
 
   return (
     <div className="space-y-8">
-      <header>
-        <h2 className="text-3xl font-bold tracking-tight">Gestão de Pagamentos</h2>
-        <p className="text-black/50">Baixa manual de parcelas recebidas</p>
+      <header className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Gestão de Pagamentos</h2>
+          <p className="text-black/50">Baixa manual e estornos de parcelas</p>
+        </div>
+        <div className="flex bg-black/5 p-1 rounded-2xl">
+          <button 
+            onClick={() => setActiveTab('pending')}
+            className={cn(
+              "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+              activeTab === 'pending' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
+            )}
+          >
+            Pendentes
+          </button>
+          <button 
+            onClick={() => setActiveTab('received')}
+            className={cn(
+              "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+              activeTab === 'received' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
+            )}
+          >
+            Histórico/Recebidos
+          </button>
+        </div>
       </header>
 
-      <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
-        <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
-          <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas por Data)</h3>
-          <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">
-            {pending.length} Grupos
-          </span>
+      {activeTab === 'pending' ? (
+        <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
+          <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
+            <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas por Data)</h3>
+            <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">
+              {pending.length} Grupos
+            </span>
+          </div>
+          <table className="w-full text-left min-w-[1000px]">
+            <thead>
+              <tr className="border-b border-black/5 bg-black/[0.02]">
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">CPF</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cotas</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR TOTAL</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40 text-right">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pending.map((group, idx) => (
+                <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
+                  <td className="p-6 text-sm font-bold">{group.owner_name}</td>
+                  <td className="p-6 text-sm font-mono">{group.owner_cpf}</td>
+                  <td className="p-6">
+                    <p className="text-sm font-medium">{group.product_name}</p>
+                    <p className="text-[10px] text-black/40">Cotas: {group.quota_numbers.join(', ')}</p>
+                  </td>
+                  <td className={cn(
+                    "p-6 font-mono text-sm",
+                    new Date(group.due_date + 'T23:59:59') < new Date() ? "text-red-600 font-bold" : ""
+                  )}>
+                    {new Date(group.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
+                  </td>
+                  <td className="p-6 font-bold text-emerald-600">
+                    {group.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </td>
+                  <td className="p-6 text-right">
+                    <button 
+                      onClick={() => handleMarkAsPaid(group.ids)}
+                      className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold hover:scale-105 transition-all"
+                    >
+                      Confirmar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {pending.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-20 text-center text-black/30">Nada pendente.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
-        <table className="w-full text-left min-w-[1000px]">
-          <thead>
-            <tr className="border-b border-black/5 bg-black/[0.02]">
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">CPF</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto / Cotas</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Vencimento</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">VALOR TOTAL</th>
-              <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40 text-right">Ação</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((group, idx) => (
-              <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
-                <td className="p-6">
-                  <p className="font-bold whitespace-nowrap">{group.owner_name}</p>
-                </td>
-                <td className="p-6">
-                  <p className="font-mono text-sm whitespace-nowrap">{group.owner_cpf}</p>
-                </td>
-                <td className="p-6">
-                  <p className="font-medium text-sm">{group.product_name}</p>
-                  <p className="text-[10px] text-black/40">Cotas: {group.quota_numbers.join(', ')}</p>
-                </td>
-                <td className={cn(
-                  "p-6 font-mono text-sm",
-                  new Date(group.due_date + 'T23:59:59') < new Date() ? "text-red-600 font-bold" : ""
-                )}>
-                  {new Date(group.due_date + 'T12:00:00').toLocaleDateString('pt-BR')}
-                  {new Date(group.due_date + 'T23:59:59') < new Date() && (
-                    <span className="block text-[10px] uppercase tracking-widest text-red-500 mt-1">Em Atraso</span>
-                  )}
-                </td>
-                <td className="p-6 font-bold text-emerald-600">
-                  {group.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </td>
-                <td className="p-6 text-right">
+      ) : (
+        <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
+          <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
+            <h3 className="font-bold text-xl">Histórico de Recebimentos</h3>
+          </div>
+          <table className="w-full text-left min-w-[1000px]">
+            <thead>
+              <tr className="border-b border-black/5 bg-black/[0.02]">
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Cliente</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Produto/Cota</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Data Pagamento</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40">Valor</th>
+                <th className="p-6 text-xs font-bold uppercase tracking-widest opacity-40 text-right">Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {received.map((inst, idx) => (
+                <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
+                  <td className="p-6">
+                    <p className="font-bold text-sm">{inst.owner_name}</p>
+                    <p className="text-[10px] opacity-40 uppercase tracking-widest font-mono">{inst.owner_cpf}</p>
+                  </td>
+                  <td className="p-6">
+                    <p className="text-sm font-medium">{inst.product_name}</p>
+                    <p className="text-[10px] text-black/40">Cota: #{inst.quota_number}</p>
+                  </td>
+                  <td className="p-6 text-sm">
+                    {inst.paid_at ? new Date(inst.paid_at).toLocaleString('pt-BR') : '-'}
+                  </td>
+                  <td className="p-6">
+                    <p className={cn("font-bold", inst.status === 'refund' ? "text-red-500" : "text-emerald-600")}>
+                      {inst.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                    {inst.status === 'refund' && <span className="text-[9px] font-bold uppercase text-red-500">Estornado</span>}
+                  </td>
+                  <td className="p-6 text-right">
+                    {inst.status === 'paid' && !inst.is_refunded && (
+                      <button 
+                        onClick={() => setShowRefundModal(inst.id)}
+                        className="px-4 py-2 bg-red-50 text-red-600 rounded-xl text-xs font-bold hover:bg-red-100 transition-all"
+                      >
+                        Estornar
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {received.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="p-20 text-center text-black/30">Nenhum pagamento recebido registrado.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Refund Modal */}
+      <AnimatePresence>
+        {showRefundModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowRefundModal(null)} 
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+              className="relative w-full max-w-md bg-white rounded-[40px] p-10 shadow-2xl space-y-6"
+            >
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
+                  <Shield size={32} />
+                </div>
+                <h3 className="text-2xl font-bold">Estornar Pagamento</h3>
+                <p className="text-black/50 text-sm">Esta ação criará um registro negativo e reabrirá o débito do cliente. O registro original permanecerá inalterado para fins de auditoria.</p>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Motivo do Estorno (Obrigatório)</label>
+                  <textarea 
+                    value={refundReason}
+                    onChange={e => setRefundReason(e.target.value)}
+                    className="w-full p-4 bg-black/5 rounded-2xl border border-black/5 focus:bg-white focus:ring-2 focus:ring-red-500 outline-none transition-all h-24"
+                    placeholder="Descreva o motivo real do estorno..."
+                  />
+                </div>
+
+                <div className="flex gap-4">
                   <button 
-                    onClick={() => handleMarkAsPaid(group.ids)}
-                    className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold hover:scale-105 transition-all"
+                    onClick={() => setShowRefundModal(null)}
+                    className="flex-1 py-4 bg-black/5 rounded-2xl font-bold hover:bg-black/10 transition-all"
                   >
-                    Confirmar Recebimento
+                    Cancelar
                   </button>
-                </td>
-              </tr>
-            ))}
-            {pending.length === 0 && (
-              <tr>
-                <td colSpan={5} className="p-20 text-center text-black/30">Nenhuma parcela pendente de recebimento.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                  <button 
+                    onClick={handleRefundPayment}
+                    disabled={!refundReason.trim()}
+                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold hover:scale-105 disabled:opacity-50 disabled:scale-100 transition-all shadow-lg shadow-red-600/20"
+                  >
+                    Confirmar Estorno
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

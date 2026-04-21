@@ -24,6 +24,27 @@ export interface Product {
   payment_type: 'cash' | 'installments' | 'recurrent';
   expiration_month?: string;
   created_at: string;
+  status: 'active' | 'closed';
+  closed_at?: string;
+  closed_by_id?: string;
+  closed_by_name?: string;
+  default_rule_type?: 'percentage_of_paid';
+  retention_percent?: number;
+  allow_manual_adjustment?: boolean;
+}
+
+export interface OwnershipHistory {
+  id: string;
+  user_id: string;
+  user_name: string;
+  joined_at: string;
+  left_at?: string;
+  exit_type?: 'cancellation' | 'resale' | 'default';
+  financial?: {
+    total_paid: number;
+    retention_value: number;
+    refund_value: number;
+  };
 }
 
 export interface Quota {
@@ -52,8 +73,15 @@ export interface ChatMessage {
 export interface Installment {
   id: string;
   quota_id: string;
+  quota_number?: string;
+  product_id?: string;
+  product_name?: string;
+  owner_id?: string;
+  owner_name?: string;
   amount: number;
   due_date: string;
-  status: 'pending' | 'paid';
+  status: 'pending' | 'paid' | 'refund' | 'retention';
   paid_at?: string;
+  reason?: string;
+  proof_url?: string;
 }
