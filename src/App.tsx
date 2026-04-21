@@ -480,7 +480,7 @@ function InviteModal({ isOpen, onClose, tenantId, userRole }: { isOpen: boolean,
       <motion.div 
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="relative w-full max-w-md bg-white rounded-[40px] p-10 shadow-2xl"
+        className="relative w-[95%] sm:w-full max-w-md bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
       >
         <h3 className="text-2xl font-bold mb-6">Convidar para a Loja</h3>
         <div className="space-y-4">
@@ -3000,7 +3000,7 @@ function ProductsList() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl"
+              className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
             >
               <h3 className="text-2xl font-bold mb-6">Novo Produto</h3>
               <div className="space-y-4">
@@ -4625,7 +4625,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl"
+                  className="relative w-[95%] sm:w-full max-w-lg bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
                 >
                   {purchaseSuccess ? (
                     <div className="text-center space-y-6 py-4">
@@ -4784,7 +4784,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-sm bg-white rounded-[40px] p-10 shadow-2xl space-y-4"
+                  className="relative w-[95%] sm:w-full max-w-sm bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl space-y-4 overflow-y-auto max-h-[90vh]"
                 >
                   <h3 className="text-xl font-bold text-center">Ações na Cota</h3>
                   <div className="space-y-3">
@@ -4852,7 +4852,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-2xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                  className="relative w-[95%] sm:w-full max-w-2xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
                 >
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="text-2xl font-bold">Histórico de Posse</h3>
@@ -4947,7 +4947,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                  className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
                 >
                   <h3 className="text-2xl font-bold mb-2">Revender Cota (Transferência)</h3>
                   <p className="text-black/50 mb-6">Cota #{cancellationData.quotaNumber}</p>
@@ -5059,17 +5059,17 @@ function ProductDetail() {
                       />
                     </div>
 
-                    <div className="flex gap-4 pt-4 font-serif">
+                    <div className="flex flex-col sm:flex-row gap-3 pt-4 font-serif">
                       <button 
                         onClick={() => setShowResaleModal(null)}
-                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                        className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all order-2 sm:order-1"
                       >
                         Voltar
                       </button>
                       <button 
                         onClick={handleResale}
                         disabled={isProcessingResale || !newOwnerId || !cancellationReason}
-                        className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="w-full sm:flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 order-1 sm:order-2"
                       >
                         {isProcessingResale ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Revenda Atômica'}
                       </button>
@@ -5094,7 +5094,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl space-y-6"
+                  className="relative w-[95%] sm:w-full max-w-lg bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl space-y-6 overflow-y-auto max-h-[90vh]"
                 >
                   <div className="text-center">
                     <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -5130,17 +5130,17 @@ function ProductDetail() {
                     </p>
                   </div>
 
-                  <div className="flex gap-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
                     <button 
                       onClick={() => setShowCloseModal(false)}
-                      className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold"
+                      className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold order-2 sm:order-1"
                     >
                       Voltar
                     </button>
                     <button 
                       onClick={handleCloseProduct}
                       disabled={isClosingProduct}
-                      className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-neutral-900 transition-all flex items-center justify-center gap-2"
+                      className="w-full sm:flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-neutral-900 transition-all flex items-center justify-center gap-2 order-1 sm:order-2"
                     >
                       {isClosingProduct ? <RefreshCw className="animate-spin" size={20} /> : 'Confirmar Fechamento Definitivo'}
                     </button>
@@ -5164,7 +5164,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                  className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
                 >
                   <h3 className="text-2xl font-bold mb-2">Registrar Devolução Financeira</h3>
                   <p className="text-black/50 mb-6">Controle avulso para a Cota #{cancellationData.quotaNumber}</p>
@@ -5234,17 +5234,17 @@ function ProductDetail() {
                       />
                     </div>
 
-                    <div className="flex gap-4 pt-4">
+                    <div className="flex flex-col sm:flex-row gap-3 pt-4">
                       <button 
                         onClick={() => setShowStandaloneRefundModal(null)}
-                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                        className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all order-2 sm:order-1"
                       >
                         Cancelar
                       </button>
                       <button 
                         onClick={handleStandaloneRefund}
                         disabled={isProcessingCancellation || !standaloneRefundReason || manualRefundValue <= 0 || manualRefundValue > cancellationData.totalPaid}
-                        className="flex-[2] py-4 bg-black text-white rounded-2xl font-bold hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="w-full sm:flex-[2] py-4 bg-black text-white rounded-2xl font-bold hover:opacity-90 transition-all disabled:opacity-50 flex items-center justify-center gap-2 order-1 sm:order-2"
                       >
                         {isProcessingCancellation ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Devolução'}
                       </button>
@@ -5269,7 +5269,7 @@ function ProductDetail() {
                   initial={{ scale: 0.9, opacity: 0, y: 20 }}
                   animate={{ scale: 1, opacity: 1, y: 0 }}
                   exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-full max-w-lg bg-white rounded-[40px] p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+                  className="relative w-[95%] sm:w-full max-w-lg bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
                 >
                   <h3 className="text-2xl font-bold mb-2">Cancelar Participação</h3>
                   <p className="text-black/50 mb-8">Cota #{cancellationData.quotaNumber}</p>
@@ -5347,17 +5347,17 @@ function ProductDetail() {
                       )}
                     </div>
 
-                    <div className="flex gap-4 pt-4 font-serif">
+                    <div className="flex flex-col sm:flex-row gap-3 pt-4 font-serif">
                       <button 
                         onClick={() => setShowCancellationModal(null)}
-                        className="flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+                        className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all order-2 sm:order-1"
                       >
                         Voltar
                       </button>
                       <button 
                         onClick={handleCancelParticipation}
                         disabled={isProcessingCancellation || !cancellationReason}
-                        className="flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50 flex items-center justify-center gap-2"
+                        className="w-full sm:flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200 disabled:opacity-50 flex items-center justify-center gap-2 order-1 sm:order-2"
                       >
                         {isProcessingCancellation ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Cancelamento'}
                       </button>
@@ -6044,9 +6044,9 @@ function ClientsList() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-2xl bg-white rounded-[40px] shadow-2xl overflow-hidden"
+              className="relative w-[95%] sm:w-full max-w-2xl bg-white rounded-[32px] sm:rounded-[40px] shadow-2xl overflow-y-auto max-h-[90vh]"
             >
-              <div className="p-10 space-y-8">
+              <div className="p-6 sm:p-10 space-y-8">
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="text-3xl font-bold tracking-tight">{selectedUserDetails.user.name}</h3>
@@ -6143,7 +6143,7 @@ function ClientsList() {
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-xl bg-white rounded-[40px] p-10 shadow-2xl"
+              className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
             >
               <h3 className="text-2xl font-bold mb-6">Novo Usuário</h3>
               <div className="space-y-4">
@@ -7592,7 +7592,7 @@ function PaymentManagement() {
             />
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-              className="relative w-full max-w-md bg-white rounded-[40px] p-10 shadow-2xl space-y-6"
+              className="relative w-[95%] sm:w-full max-w-md bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl space-y-6 overflow-y-auto max-h-[90vh]"
             >
               <div className="text-center space-y-2">
                 <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
@@ -7613,17 +7613,17 @@ function PaymentManagement() {
                   />
                 </div>
 
-                <div className="flex gap-4">
+                <div className="flex flex-col sm:flex-row gap-4">
                   <button 
                     onClick={() => setShowRefundModal(null)}
-                    className="flex-1 py-4 bg-black/5 rounded-2xl font-bold hover:bg-black/10 transition-all"
+                    className="flex-1 py-4 bg-black/5 rounded-2xl font-bold hover:bg-black/10 transition-all order-2 sm:order-1"
                   >
                     Cancelar
                   </button>
                   <button 
                     onClick={handleRefundPayment}
                     disabled={!refundReason.trim()}
-                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold hover:scale-105 disabled:opacity-50 disabled:scale-100 transition-all shadow-lg shadow-red-600/20"
+                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-bold hover:scale-105 disabled:opacity-50 disabled:scale-100 transition-all shadow-lg shadow-red-600/20 order-1 sm:order-2"
                   >
                     Confirmar Estorno
                   </button>
