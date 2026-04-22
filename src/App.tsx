@@ -2763,12 +2763,12 @@ function Dashboard() {
             >
               <div className="flex justify-between items-start gap-4">
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-black uppercase tracking-widest opacity-30 mb-2 truncate">{pr.name}</p>
-                  <p className="text-3xl font-black tracking-tighter break-words text-[#141414]">{formatCurrency(pr.revenue)}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 truncate">{pr.name}</p>
+                  <p className="text-3xl font-black font-serif leading-tight break-words text-[#141414]">{formatCurrency(pr.revenue)}</p>
                 </div>
                 <div className="bg-black/[0.03] p-4 rounded-3xl shrink-0 text-center min-w-[70px]">
-                  <p className="text-[10px] font-black opacity-20 uppercase tracking-widest leading-none mb-1">Cotas</p>
-                  <p className="text-xl font-black text-black/80 leading-none">{pr.total_quotas}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest opacity-20 leading-none mb-1">Cotas</p>
+                  <p className="text-xl font-black font-serif text-black/80 leading-none">{pr.total_quotas}</p>
                 </div>
               </div>
               
