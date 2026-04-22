@@ -2749,9 +2749,48 @@ function Dashboard() {
         <FinanceCard label="Resultado Líquido" value={financeData.net} color="text-indigo-600" bg="bg-indigo-50/50" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Product List - Full width, 4 per line */}
+      <div className="space-y-6">
+        <div className="px-4 flex items-center justify-between">
+          <h3 className="font-black text-2xl tracking-tight">Produtos</h3>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pr-2">
+          {(stats?.productRevenue || []).map((pr: any, i: number) => (
+            <div 
+              key={i} 
+              className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6 hover:border-indigo-600/20 active:scale-[0.98] transition-all cursor-pointer group"
+              onClick={() => setSelectedProduct(pr)}
+            >
+              <div className="flex justify-between items-start gap-4">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-30 mb-2 truncate">{pr.name}</p>
+                  <p className="text-3xl font-black tracking-tighter break-words text-[#141414]">{formatCurrency(pr.revenue)}</p>
+                </div>
+                <div className="bg-black/[0.03] p-4 rounded-3xl shrink-0 text-center min-w-[70px]">
+                  <p className="text-[10px] font-black opacity-20 uppercase tracking-widest leading-none mb-1">Cotas</p>
+                  <p className="text-xl font-black text-black/80 leading-none">{pr.total_quotas}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between pt-6 border-t border-black/5">
+                <button 
+                  onClick={(e) => { e.stopPropagation(); exportProductToCSV(pr.name, pr.sales_details); }}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#141414] text-white rounded-xl hover:bg-indigo-600 transition-all text-[10px] font-black uppercase tracking-tighter"
+                >
+                  <FileSpreadsheet size={14} /> Planilha
+                </button>
+                <button className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-black/20 group-hover:text-indigo-600 transition-all">
+                  Relatório <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-8">
         {/* Performance Evolution Chart */}
-        <div className="lg:col-span-2 bg-white p-10 rounded-[48px] border border-black/5 shadow-sm space-y-8">
+        <div className="bg-white p-10 rounded-[48px] border border-black/5 shadow-sm space-y-8 w-full">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-2xl font-black tracking-tight">Evolução de Fluxo</h3>
@@ -2790,46 +2829,6 @@ function Dashboard() {
               Dados insuficientes para gerar a projeção de crescimento diário.
             </div>
           )}
-        </div>
-
-        {/* Product Performance List */}
-        <div className="space-y-6 h-fit bg-white/30 p-2 rounded-[40px]">
-          <div className="px-4 flex items-center justify-between">
-            <h3 className="font-black text-xl tracking-tight">Ranking de Produtos</h3>
-            <span className="bg-black text-white text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-tighter">Performance</span>
-          </div>
-          <div className="grid grid-cols-1 gap-4 max-h-[850px] overflow-y-auto pr-2 custom-scrollbar">
-            {(stats?.productRevenue || []).map((pr: any, i: number) => (
-              <div 
-                key={i} 
-                className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6 hover:border-indigo-600/20 active:scale-[0.98] transition-all cursor-pointer group"
-                onClick={() => setSelectedProduct(pr)}
-              >
-                <div className="flex justify-between items-start gap-4">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[10px] font-black uppercase tracking-widest opacity-30 mb-2 truncate">{pr.name}</p>
-                    <p className="text-3xl font-black tracking-tighter break-words text-[#141414]">{formatCurrency(pr.revenue)}</p>
-                  </div>
-                  <div className="bg-black/[0.03] p-4 rounded-3xl shrink-0 text-center min-w-[70px]">
-                    <p className="text-[10px] font-black opacity-20 uppercase tracking-widest leading-none mb-1">Cotas</p>
-                    <p className="text-xl font-black text-black/80 leading-none">{pr.total_quotas}</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center justify-between pt-6 border-t border-black/5">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); exportProductToCSV(pr.name, pr.sales_details); }}
-                    className="flex items-center gap-2 px-4 py-2 bg-[#141414] text-white rounded-xl hover:bg-indigo-600 transition-all text-[10px] font-black uppercase tracking-tighter"
-                  >
-                    <FileSpreadsheet size={14} /> Planilha
-                  </button>
-                  <button className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-black/20 group-hover:text-indigo-600 transition-all">
-                    Relatório <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -3518,9 +3517,6 @@ function ProductDetail() {
   const [manualRefundValue, setManualRefundValue] = useState<number>(0);
   const [cancellationProofUrl, setCancellationProofUrl] = useState('');
   const [isProcessingCancellation, setIsProcessingCancellation] = useState(false);
-  const [showResaleModal, setShowResaleModal] = useState<string | null>(null);
-  const [newOwnerId, setNewOwnerId] = useState('');
-  const [isProcessingResale, setIsProcessingResale] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [isClosingProduct, setIsClosingProduct] = useState(false);
   const [showQuotaMenu, setShowQuotaMenu] = useState<string | null>(null);
@@ -3567,185 +3563,6 @@ function ProductDetail() {
     } catch (err) {
       console.error(err);
       alert('Erro ao carregar dados de cancelamento');
-    }
-  };
-
-  const openResaleModal = async (quotaId: string) => {
-    if (!tenantId || !product) return;
-    if (product.status === 'closed') return alert('Este produto está encerrado. Nenhuma alteração é permitida.');
-    const quota = quotas.find(q => q.id === quotaId);
-    if (!quota) return;
-
-    try {
-      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
-      const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'paid'));
-      const snapshot = await getDocs(q);
-      
-      const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
-      const retentionPercent = product.retention_percent || 0;
-      const retentionValue = totalPaid * (retentionPercent / 100);
-      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
-
-      setCancellationData({
-        quotaId,
-        quotaNumber: quota.number,
-        totalPaid,
-        retentionPercent,
-        retentionValue,
-        suggestedRefund
-      });
-      setManualRefundValue(suggestedRefund);
-      setShowResaleModal(quotaId);
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao carregar dados para revenda');
-    }
-  };
-
-  const handleResale = async () => {
-    if (!tenantId || !product || !cancellationData || !newOwnerId) return;
-    if (!cancellationReason) return alert('Por favor, informe o motivo da revenda.');
-    
-    setIsProcessingResale(true);
-    try {
-      const { quotaId, totalPaid, retentionValue } = cancellationData;
-      const batch = writeBatch(db);
-      const now = new Date().toISOString();
-      const quota = quotas.find(q => q.id === quotaId);
-      const newOwner = clients.find(c => c.id === newOwnerId);
-      if (!newOwner) throw new Error('Novo cotista não encontrado');
-
-      // 1. Update Quota
-      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
-      batch.update(quotaRef, {
-        status: 'sold',
-        is_paid: false,
-        owner_id: newOwner.id,
-        owner_name: newOwner.name,
-        owner_cpf: newOwner.cpf || '',
-        sold_at: now
-      });
-
-      // 2. Mark pending installments of previous owner as cancelled
-      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
-      const qPending = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'pending'));
-      const snapshotPending = await getDocs(qPending);
-      snapshotPending.docs.forEach(d => {
-        batch.update(d.ref, { status: 'cancelled', cancelled_at: now, reason: 'Revenda de cota' });
-      });
-
-      // 3. Create Refund Installment for previous owner
-      if (manualRefundValue > 0) {
-        const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(refundRef, {
-          quota_id: quotaId,
-          quota_number: cancellationData.quotaNumber,
-          product_id: product.id,
-          product_name: product.name,
-          owner_id: quota?.owner_id || '',
-          owner_name: quota?.owner_name || '',
-          owner_cpf: quota?.owner_cpf || '',
-          amount: -manualRefundValue,
-          status: 'refund',
-          reason: `Reembolso por revenda de cota: ${cancellationReason}`,
-          proof_url: cancellationProofUrl || '',
-          paid_at: now,
-          due_date: now.split('T')[0],
-          createdAt: serverTimestamp()
-        });
-      }
-
-      // 3.1 Create Retention Record
-      if (retentionValue > 0) {
-        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(retentionRef, {
-          quota_id: quotaId,
-          quota_number: cancellationData.quotaNumber,
-          product_id: product.id,
-          product_name: product.name,
-          owner_id: quota?.owner_id || '',
-          owner_name: quota?.owner_name || '',
-          amount: retentionValue,
-          status: 'retention',
-          reason: `Retenção por revenda: ${cancellationReason}`,
-          paid_at: now,
-          due_date: now.split('T')[0],
-          createdAt: serverTimestamp()
-        });
-      }
-
-      // 4. Create new installments for the NEW owner
-      const installmentDates = getInstallmentDates(installmentCount);
-      const amountPerInstallment = quota!.price / installmentCount;
-      
-      installmentDates.forEach((date, i) => {
-        const instRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(instRef, {
-          product_id: product.id,
-          product_name: product.name,
-          quota_id: quotaId,
-          quota_number: quota!.number,
-          owner_id: newOwner.id,
-          owner_name: newOwner.name,
-          owner_cpf: newOwner.cpf || '',
-          amount: amountPerInstallment,
-          due_date: date.toISOString().split('T')[0],
-          status: 'pending',
-          createdAt: serverTimestamp()
-        });
-      });
-
-      // 5. Ownership History entries
-      const previousOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
-      batch.set(previousOwnerLogRef, {
-        user_id: quota?.owner_id || '',
-        user_name: quota?.owner_name || '',
-        joined_at: quota?.sold_at || now,
-        left_at: now,
-        exit_type: 'resale',
-        financial: {
-          total_paid: totalPaid,
-          retention_value: retentionValue,
-          refund_value: manualRefundValue
-        }
-      });
-
-      const nextOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
-      batch.set(nextOwnerLogRef, {
-        user_id: newOwner.id,
-        user_name: newOwner.name,
-        joined_at: now
-      });
-
-      // 6. Audit Log
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      batch.set(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'REVENDA_COTA',
-        details: `Revenda da cota #${cancellationData.quotaNumber} de ${quota?.owner_name} para ${newOwner.name}.`,
-        financial: {
-          previous_owner_paid: totalPaid,
-          retention: retentionValue,
-          refund: manualRefundValue
-        },
-        quota_id: quotaId,
-        previous_owner_id: quota?.owner_id || '',
-        new_owner_id: newOwner.id,
-        created_at: serverTimestamp()
-      });
-
-      await batch.commit();
-      alert('Cota revendida com sucesso!');
-      setShowResaleModal(null);
-      setCancellationData(null);
-      setNewOwnerId('');
-      setCancellationReason('');
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao processar revenda');
-    } finally {
-      setIsProcessingResale(false);
     }
   };
 
@@ -5037,15 +4854,6 @@ function ProductDetail() {
                     <button 
                       onClick={() => {
                         setShowQuotaMenu(null);
-                        openResaleModal(showQuotaMenu);
-                      }}
-                      className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-                    >
-                      <RefreshCw size={20} /> Revender Cota (Transferência)
-                    </button>
-                    <button 
-                      onClick={() => {
-                        setShowQuotaMenu(null);
                         openStandaloneRefundModal(showQuotaMenu);
                       }}
                       className="w-full py-4 bg-amber-600/10 text-amber-600 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-amber-600/20 transition-all border border-amber-600/10"
@@ -5164,153 +4972,6 @@ function ProductDetail() {
                     >
                       Fechar Histórico
                     </button>
-                  </div>
-                </motion.div>
-              </div>
-            )}
-          </AnimatePresence>
-
-          <AnimatePresence>
-            {showResaleModal && cancellationData && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => setShowResaleModal(null)}
-                  className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-                />
-                <motion.div 
-                  initial={{ scale: 0.9, opacity: 0, y: 20 }}
-                  animate={{ scale: 1, opacity: 1, y: 0 }}
-                  exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                  className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
-                >
-                  <h3 className="text-2xl font-bold mb-2">Revender Cota (Transferência)</h3>
-                  <p className="text-black/50 mb-6">Cota #{cancellationData.quotaNumber}</p>
-
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-black/5 p-4 rounded-3xl">
-                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Cotista Atual</p>
-                        <p className="font-bold">{quotas.find(q => q.id === showResaleModal)?.owner_name || 'Desconhecido'}</p>
-                      </div>
-                      <div className="bg-black/5 p-4 rounded-3xl">
-                        <p className="text-[10px] font-bold uppercase opacity-40 mb-1">Total Pago</p>
-                        <p className="font-bold text-emerald-600">{cancellationData.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl">
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="opacity-60">Retenção ({cancellationData.retentionPercent}%)</span>
-                        <span className="font-bold text-red-600">-{cancellationData.retentionValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                      </div>
-                      <div className="flex justify-between text-xs font-bold">
-                        <span>Devolução Sugerida</span>
-                        <span className="text-emerald-700">{cancellationData.suggestedRefund.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                      </div>
-                    </div>
-
-                    {product?.allow_manual_adjustment && (
-                      <div>
-                        <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Ajuste Manual da Devolução (R$)</label>
-                        <input 
-                          type="number"
-                          className="w-full p-4 bg-black/5 rounded-2xl font-bold"
-                          value={manualRefundValue}
-                          onChange={(e) => setManualRefundValue(Number(e.target.value))}
-                        />
-                      </div>
-                    )}
-
-                    <div className="pt-4 border-t border-black/5">
-                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Vincular Novo Cotista *</label>
-                      <div className="space-y-2">
-                        <div className="relative">
-                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
-                          <input 
-                            type="text"
-                            placeholder="Buscar cliente por nome ou email..."
-                            className="w-full pl-12 pr-4 py-4 bg-black/5 rounded-2xl text-sm"
-                            value={searchClient}
-                            onChange={(e) => setSearchClient(e.target.value)}
-                          />
-                        </div>
-                        <div className="max-h-40 overflow-y-auto border border-black/5 rounded-2xl">
-                          {clients
-                            .filter(c => 
-                              c.name.toLowerCase().includes(searchClient.toLowerCase()) || 
-                              c.email.toLowerCase().includes(searchClient.toLowerCase())
-                            )
-                            .map(client => (
-                              <button 
-                                key={client.id}
-                                onClick={() => {
-                                  setNewOwnerId(client.id);
-                                  setSearchClient(client.name);
-                                }}
-                                className={cn(
-                                  "w-full p-4 text-left text-sm transition-all border-b border-black/5 last:border-0 hover:bg-black/5",
-                                  newOwnerId === client.id ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-white"
-                                )}
-                              >
-                                {client.name} ({client.email})
-                              </button>
-                            ))
-                          }
-                          {clients.filter(c => c.name.toLowerCase().includes(searchClient.toLowerCase())).length === 0 && (
-                            <p className="p-8 text-center text-xs text-black/30">Nenhum cliente encontrado.</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Nova Condição de Pagamento</label>
-                      <div className="bg-black/5 p-4 rounded-2xl space-y-4">
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="opacity-60">Parcelas</span>
-                          <select 
-                            value={installmentCount}
-                            onChange={(e) => setInstallmentCount(Number(e.target.value))}
-                            className="p-2 bg-white rounded-lg outline-none font-bold"
-                          >
-                            {Array.from({ length: dynamicInstallmentCount }, (_, i) => (
-                              <option key={i+1} value={i+1}>{i+1}x</option>
-                            ))}
-                          </select>
-                        </div>
-                        <p className="text-[10px] opacity-40 italic">O novo cotista assumirá o débito total da cota distribuído nas parcelas acima.</p>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2 ml-1">Motivo da Revenda *</label>
-                      <textarea 
-                        className="w-full p-4 bg-black/5 rounded-2xl h-24 text-sm outline-none"
-                        placeholder="Ex: Transferência administrativa, inadimplência técnica..."
-                        value={cancellationReason}
-                        onChange={(e) => setCancellationReason(e.target.value)}
-                        required
-                      />
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-3 pt-4 font-serif">
-                      <button 
-                        onClick={() => setShowResaleModal(null)}
-                        className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all order-2 sm:order-1"
-                      >
-                        Voltar
-                      </button>
-                      <button 
-                        onClick={handleResale}
-                        disabled={isProcessingResale || !newOwnerId || !cancellationReason}
-                        className="w-full sm:flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50 flex items-center justify-center gap-2 order-1 sm:order-2"
-                      >
-                        {isProcessingResale ? <RefreshCw size={20} className="animate-spin" /> : 'Confirmar Revenda Atômica'}
-                      </button>
-                    </div>
                   </div>
                 </motion.div>
               </div>
