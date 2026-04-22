@@ -37,7 +37,8 @@ import {
   Camera,
   Info,
   History,
-  Search
+  Search,
+  TrendingUp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -604,7 +605,6 @@ function AuthenticatedApp({ settings }: { settings: any }) {
           {user.role !== 'client' && (
             <>
               <SidebarLink to="/clients" icon={<Users size={20} />} label="Clientes" isOpen={showLabels} />
-              <SidebarLink to="/finance" icon={<CreditCard size={20} />} label="Financeiro" isOpen={showLabels} />
               <SidebarLink to="/payments" icon={<CreditCard size={20} />} label="Pagamentos" isOpen={showLabels} />
             </>
           )}
@@ -2389,8 +2389,25 @@ function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
-  const { tenantId } = React.useContext(AuthContext)!;
+  const { user, tenantId } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
+
+  // Financial States (from FinancialConsole)
+  const [financeData, setFinanceData] = useState<{
+    collected: number;
+    refunded: number;
+    retained: number;
+    net: number;
+    items: any[];
+  }>({ collected: 0, refunded: 0, retained: 0, net: 0, items: [] });
+  const [financeLoading, setFinanceLoading] = useState(true);
+  const [dbProducts, setDbProducts] = useState<Product[]>([]);
+  const [dbClients, setDbClients] = useState<User[]>([]);
+  
+  const [filterProduct, setFilterProduct] = useState('all');
+  const [filterClient, setFilterClient] = useState('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   useEffect(() => {
     if (!tenantId) return;
@@ -2411,8 +2428,7 @@ function Dashboard() {
           revenue: 0,
           pendingPayments: 0,
           receivedPayments: 0,
-          productRevenue: [],
-          recentActivity: []
+          productRevenue: []
         });
         return;
       }
@@ -2460,13 +2476,13 @@ function Dashboard() {
         revenue: receivedPayments,
         pendingPayments,
         receivedPayments,
-        productRevenue,
-        recentActivity: [] 
+        productRevenue
       });
     };
 
     const unsubProducts = onSnapshot(productsRef, (snapshot) => {
       products = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setDbProducts(products as Product[]);
       updateStats();
     });
 
@@ -2480,21 +2496,6 @@ function Dashboard() {
       updateStats();
     });
 
-    const auditRef = collection(db, 'tenants', tenantId, 'audit_logs');
-    const auditQuery = query(auditRef, orderBy('created_at', 'desc'), limit(5));
-    const unsubAudit = onSnapshot(auditQuery, (snapshot) => {
-      const activities = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          title: data.user_name || 'Sistema',
-          details: data.details,
-          createdAt: data.created_at?.toDate?.()?.toISOString() || new Date().toISOString()
-        };
-      });
-      setStats((prev: any) => prev ? { ...prev, recentActivity: activities } : null);
-    });
-
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 1000);
@@ -2503,17 +2504,106 @@ function Dashboard() {
       unsubProducts();
       unsubQuotas();
       unsubInstallments();
-      unsubAudit();
       clearInterval(timer);
     };
   }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    const fetchClients = async () => {
+      const cSnapshot = await getDocs(query(collection(db, 'tenants', tenantId, 'users'), where('role', '==', 'client')));
+      setDbClients(cSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as User)));
+    };
+    fetchClients();
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    setFinanceLoading(true);
+    
+    const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+    let q = query(installmentsRef, where('status', 'in', ['paid', 'refund', 'retention']));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const rawItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      
+      let filtered = rawItems.filter(item => {
+        if (filterProduct !== 'all' && item.product_id !== filterProduct) return false;
+        if (filterClient !== 'all' && item.owner_id !== filterClient) return false;
+        if (startDate && item.paid_at && item.paid_at < startDate) return false;
+        if (endDate && item.paid_at && item.paid_at > endDate + 'T23:59:59') return false;
+        return true;
+      });
+
+      filtered.sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
+
+      const collected = filtered.filter(i => i.status === 'paid').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      const refunded = filtered.filter(i => i.status === 'refund').reduce((acc, i) => acc + Math.abs(Number(i.amount) || 0), 0);
+      const retained = filtered.filter(i => i.status === 'retention').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      
+      setFinanceData({
+        collected,
+        refunded,
+        retained,
+        net: collected - refunded,
+        items: filtered
+      });
+      setFinanceLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [tenantId, filterProduct, filterClient, startDate, endDate]);
+
+  const chartData = useMemo(() => {
+    const dailyData: { [key: string]: number } = {};
+    financeData.items.forEach(item => {
+      if (item.status === 'paid') {
+        const date = item.paid_at ? item.paid_at.split('T')[0] : '';
+        if (date) {
+          dailyData[date] = (dailyData[date] || 0) + (Number(item.amount) || 0);
+        }
+      }
+    });
+
+    return Object.entries(dailyData)
+      .map(([date, amount]) => ({
+        rawDate: date,
+        date: new Date(date + 'T12:00:00').toLocaleDateString('pt-BR'),
+        amount
+      }))
+      .sort((a, b) => a.rawDate.localeCompare(b.rawDate));
+  }, [financeData.items]);
+
+  const exportFinancialToCSV = () => {
+    const headers = ['Data', 'Tipo', 'Produto', 'Cotista', 'Valor', 'Motivo'];
+    const rows = financeData.items.map(i => [
+      i.paid_at ? new Date(i.paid_at).toLocaleDateString() : '-',
+      i.status === 'paid' ? 'Pagamento' : i.status === 'refund' ? 'Reembolso' : 'Retenção',
+      i.product_name,
+      i.owner_name,
+      i.amount,
+      i.reason || '-'
+    ]);
+    
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" 
+      + headers.join(";") + "\n"
+      + rows.map(e => e.join(";")).join("\n");
+    
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `painel_financeiro_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   if (!stats) return <div className="p-8">Carregando dados...</div>;
 
   const formatCurrency = (val: number) => 
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
 
-  const exportToCSV = (productName: string, sales: any[]) => {
+  const exportProductToCSV = (productName: string, sales: any[]) => {
     const headers = ["Cota #", "Comprador", "CPF", "Parcelas Pagas", "Total Parcelas"];
     const rows = sales.map(s => [s.number || s.id, s.owner, s.cpf || 'Não informado', s.paid_installments, s.total_installments]);
     const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(";")).join("\n");
@@ -2533,8 +2623,10 @@ function Dashboard() {
     doc.text(`Lista de Vendas - ${productName}`, 14, 15);
     (doc as any).autoTable({
       startY: 20,
+      theme: 'striped',
       head: [['Cota #', 'Comprador', 'Parcelas Pagas', 'Total']],
       body: sales.map(s => [s.number || s.id, s.owner, s.paid_installments, s.total_installments]),
+      headStyles: { fillStyle: '#141414' }
     });
     doc.save(`vendas_${productName.toLowerCase().replace(/\s+/g, '_')}.pdf`);
   };
@@ -2542,66 +2634,69 @@ function Dashboard() {
   if (selectedProduct) {
     return (
       <div className="space-y-8">
-        <header className="flex items-center gap-4">
-          <button 
-            onClick={() => setSelectedProduct(null)}
-            className="p-2 hover:bg-black/5 rounded-full transition-all"
-          >
-            <ArrowLeft size={24} />
-          </button>
-          <div>
-            <h2 className="text-3xl font-bold tracking-tight">Compradores: {selectedProduct.name}</h2>
-            <p className="text-black/50">Lista detalhada de proprietários de cotas</p>
+        <header className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setSelectedProduct(null)}
+              className="p-2 hover:bg-black/5 rounded-full transition-all"
+            >
+              <ArrowLeft size={24} />
+            </button>
+            <div>
+              <h2 className="text-3xl font-black tracking-tight">{selectedProduct.name}</h2>
+              <p className="text-black/40 text-sm font-medium">Gestão de cotistas e progresso de pagamentos</p>
+            </div>
+          </div>
+          <div className="flex gap-4">
+            <button 
+              onClick={() => exportProductToCSV(selectedProduct.name, selectedProduct.sales_details)}
+              className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-2xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100"
+            >
+              <FileSpreadsheet size={18} /> Exportar Planilha
+            </button>
           </div>
         </header>
 
         <div className="bg-white rounded-3xl p-8 border border-black/5 shadow-sm">
-          <div className="flex justify-between items-center mb-8">
-            <h3 className="font-bold text-xl">Relatório de Vendas</h3>
-            <div className="flex gap-4">
-              <button 
-                onClick={() => exportToCSV(selectedProduct.name, selectedProduct.sales_details)}
-                className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-sm font-bold hover:bg-emerald-100 transition-all"
-              >
-                <FileSpreadsheet size={18} /> Planilha
-              </button>
-            </div>
-          </div>
-
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-black/5">
-                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Cota #</th>
-                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Proprietário</th>
-                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">CPF</th>
-                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Parcelas Pagas</th>
-                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-40">Progresso</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Cota #</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Proprietário</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">CPF</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Parcelas Pagas</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4 text-right">Progresso</th>
                 </tr>
               </thead>
               <tbody>
                 {(selectedProduct.sales_details || []).map((sale: any, idx: number) => (
                   <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.02] transition-all">
-                    <td className="py-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
-                    <td className="py-4 font-medium">{sale.owner}</td>
-                    <td className="py-4 text-sm text-black/60">{sale.cpf || 'Não informado'}</td>
-                    <td className="py-4 font-medium">{sale.paid_installments} / {sale.total_installments}</td>
-                    <td className="py-4">
-                      <div className="w-24 h-2 bg-black/5 rounded-full overflow-hidden">
-                        <div 
-                          className={cn(
-                            "h-full transition-all",
-                            sale.paid_installments === sale.total_installments ? "bg-blue-500" : "bg-emerald-500"
-                          )} 
-                          style={{ width: `${sale.total_installments > 0 ? (sale.paid_installments / sale.total_installments) * 100 : 0}%` }}
-                        />
+                    <td className="py-5 px-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
+                    <td className="py-5 px-4 font-bold text-black/80">{sale.owner}</td>
+                    <td className="py-5 px-4 text-sm text-black/50 font-medium">{sale.cpf || 'Não informado'}</td>
+                    <td className="py-5 px-4 font-bold text-black/70">{sale.paid_installments} / {sale.total_installments}</td>
+                    <td className="py-5 px-4">
+                      <div className="flex items-center justify-end gap-3">
+                        <div className="w-32 h-2 bg-black/5 rounded-full overflow-hidden">
+                          <div 
+                            className={cn(
+                              "h-full transition-all duration-1000",
+                              sale.paid_installments === sale.total_installments ? "bg-indigo-600" : "bg-emerald-500"
+                            )} 
+                            style={{ width: `${sale.total_installments > 0 ? (sale.paid_installments / sale.total_installments) * 100 : 0}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] font-black opacity-30 w-8 text-right">
+                          {Math.round(sale.total_installments > 0 ? (sale.paid_installments / sale.total_installments) * 100 : 0)}%
+                        </span>
                       </div>
                     </td>
                   </tr>
                 ))}
                 {(selectedProduct.sales_details || []).length === 0 && (
                   <tr>
-                    <td colSpan={2} className="py-12 text-center text-black/30">Nenhuma cota vendida para este produto ainda.</td>
+                    <td colSpan={5} className="py-20 text-center opacity-30 italic font-medium">Nenhuma cota vinculada a este produto ainda.</td>
                   </tr>
                 )}
               </tbody>
@@ -2613,120 +2708,232 @@ function Dashboard() {
   }
 
   return (
-    <div className="space-y-8">
-      <header className="flex justify-between items-end">
+    <div className="space-y-12 pb-20 text-[#141414]">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Painel</h2>
-          <p className="text-black/50">Visão geral do sistema e performance</p>
+          <h2 className="text-4xl font-black tracking-tighter text-black">Painel de Controle</h2>
+          <p className="text-black/40 text-base font-medium">Gestão financeira e operacional consolidada</p>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Horário do Servidor</p>
-          <p className="text-xs font-medium flex items-center gap-2 text-emerald-600">
-            <RefreshCw size={12} className="animate-spin-slow" /> {currentTime.toLocaleDateString('pt-BR')} {currentTime.toLocaleTimeString('pt-BR')}
-          </p>
+        <div className="flex items-center gap-4 bg-white/50 backdrop-blur-sm p-2 rounded-2xl border border-black/5">
+          <div className="text-right px-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Status do Servidor</p>
+            <p className="text-xs font-black flex items-center gap-2 text-emerald-600">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" /> 
+              Sincronizado {currentTime.toLocaleDateString('pt-BR')} {currentTime.toLocaleTimeString('pt-BR')}
+            </p>
+          </div>
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* Main Stats Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard 
           label="Produtos Ativos" 
-          value={(stats?.products || 0).toString()} 
-          sub="Total cadastrado" 
+          value={(dbProducts.length || 0).toString()} 
+          sub="Total em oferta" 
           onClick={() => navigate('/products')}
         />
-        <StatCard label="Cotas Vendidas" value={(stats?.sales || 0).toString()} sub="Total de vendas" />
-        <StatCard label="Recebido" value={formatCurrency(stats?.receivedPayments || 0)} sub="Pagamentos confirmados" />
-        <StatCard label="Pendente" value={formatCurrency(stats?.pendingPayments || 0)} sub="Aguardando baixa" onClick={() => navigate('/payments')} />
+        <StatCard label="Vendas Totais" value={(stats?.sales || 0).toString()} sub="Cotas comercializadas" />
+        <StatCard 
+          label="Pagamentos Pendentes" 
+          value={formatCurrency(stats?.pendingPayments || 0)} 
+          sub="Aguardando confirmação" 
+          onClick={() => navigate('/payments')} 
+        />
+        <FinanceCard label="Arrecadação Bruta" value={financeData.collected} color="text-emerald-600" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="space-y-6">
-          <h3 className="font-bold text-xl">Receita por Produto</h3>
-          <div className="grid grid-cols-1 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <FinanceCard label="Estornos Realizados" value={financeData.refunded} color="text-red-500" />
+        <FinanceCard label="Valores Retidos" value={financeData.retained} color="text-amber-600" />
+        <FinanceCard label="Resultado Líquido" value={financeData.net} color="text-indigo-600" bg="bg-indigo-50/50" />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Performance Evolution Chart */}
+        <div className="lg:col-span-2 bg-white p-10 rounded-[48px] border border-black/5 shadow-sm space-y-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-2xl font-black tracking-tight">Evolução de Fluxo</h3>
+              <p className="text-black/40 text-sm font-medium">Acompanhamento diário de recebimentos</p>
+            </div>
+            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl">
+              <TrendingUp size={24} />
+            </div>
+          </div>
+          {chartData.length > 0 ? (
+            <div className="h-[350px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#14141408" />
+                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: '900', opacity: 0.3 }} dy={15} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: '900', opacity: 0.3 }} tickFormatter={(val) => `R$ ${val}`} />
+                  <Tooltip 
+                    contentStyle={{ borderRadius: '32px', border: 'none', boxShadow: '0 30px 60px -12px rgba(0,0,0,0.15)', padding: '24px' }} 
+                    itemStyle={{ fontWeight: '900', color: '#141414', fontSize: '14px' }} 
+                    cursor={{ stroke: '#4f46e5', strokeWidth: 1, strokeDasharray: '4 4' }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="amount" 
+                    name="Recebido" 
+                    stroke="#4f46e5" 
+                    strokeWidth={5} 
+                    dot={{ r: 8, fill: '#4f46e5', strokeWidth: 3, stroke: '#fff' }} 
+                    activeDot={{ r: 10, strokeWidth: 0 }} 
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="h-[350px] flex items-center justify-center bg-black/[0.02] rounded-3xl border-2 border-dashed border-black/5 text-black/20 italic font-medium">
+              Dados insuficientes para gerar a projeção de crescimento diário.
+            </div>
+          )}
+        </div>
+
+        {/* Product Performance List */}
+        <div className="space-y-6 h-fit bg-white/30 p-2 rounded-[40px]">
+          <div className="px-4 flex items-center justify-between">
+            <h3 className="font-black text-xl tracking-tight">Ranking de Produtos</h3>
+            <span className="bg-black text-white text-[10px] font-black px-2 py-1 rounded-lg uppercase tracking-tighter">Performance</span>
+          </div>
+          <div className="grid grid-cols-1 gap-4 max-h-[850px] overflow-y-auto pr-2 custom-scrollbar">
             {(stats?.productRevenue || []).map((pr: any, i: number) => (
               <div 
                 key={i} 
-                className="bg-white p-6 sm:p-8 rounded-3xl border border-black/5 shadow-sm space-y-4 hover:border-black/20 transition-all cursor-pointer group"
+                className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6 hover:border-indigo-600/20 active:scale-[0.98] transition-all cursor-pointer group"
                 onClick={() => setSelectedProduct(pr)}
               >
                 <div className="flex justify-between items-start gap-4">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest opacity-50 mb-1 truncate">{pr.name}</p>
-                    <p className="text-2xl sm:text-3xl font-bold tracking-tighter break-words">{formatCurrency(pr.revenue)}</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest opacity-30 mb-2 truncate">{pr.name}</p>
+                    <p className="text-3xl font-black tracking-tighter break-words text-[#141414]">{formatCurrency(pr.revenue)}</p>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-[10px] sm:text-xs font-bold opacity-40 uppercase tracking-widest">Cotas Totais</p>
-                    <p className="text-lg sm:text-xl font-bold">{pr.total_quotas}</p>
+                  <div className="bg-black/[0.03] p-4 rounded-3xl shrink-0 text-center min-w-[70px]">
+                    <p className="text-[10px] font-black opacity-20 uppercase tracking-widest leading-none mb-1">Cotas</p>
+                    <p className="text-xl font-black text-black/80 leading-none">{pr.total_quotas}</p>
                   </div>
                 </div>
                 
-                <div className="flex items-center justify-between pt-4 border-t border-black/5">
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); exportToCSV(pr.name, pr.sales_details); }}
-                      className="p-2 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-all"
-                      title="Exportar Planilha"
-                    >
-                      <FileSpreadsheet size={16} />
-                    </button>
-                  </div>
+                <div className="flex items-center justify-between pt-6 border-t border-black/5">
                   <button 
-                    onClick={(e) => { 
-                      e.stopPropagation(); 
-                      console.log("Dashboard: Ver Compradores clicado para", pr.name);
-                      setSelectedProduct(pr); 
-                    }}
-                    className="flex items-center gap-2 text-xs font-bold text-black/40 group-hover:text-black transition-all"
+                    onClick={(e) => { e.stopPropagation(); exportProductToCSV(pr.name, pr.sales_details); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#141414] text-white rounded-xl hover:bg-indigo-600 transition-all text-[10px] font-black uppercase tracking-tighter"
                   >
-                    Ver Compradores <ChevronRight size={14} />
+                    <FileSpreadsheet size={14} /> Planilha
+                  </button>
+                  <button className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-black/20 group-hover:text-indigo-600 transition-all">
+                    Relatório <ChevronRight size={14} />
                   </button>
                 </div>
               </div>
             ))}
           </div>
         </div>
+      </div>
 
-        <div className="bg-white rounded-3xl p-8 border border-black/5 shadow-sm h-fit">
-          <h3 className="font-bold text-xl mb-6">Atividade Recente</h3>
-          <div className="space-y-4">
-            {(stats?.recentActivity || []).map((activity: any, i: number) => (
-              <div key={i} className="flex items-center justify-between py-4 border-b border-black/5 last:border-0">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-black/5 flex items-center justify-center">
-                    <RefreshCw size={18} className="text-black/40" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">{activity.title}</p>
-                    <p className="text-xs text-black/40">{activity.details}</p>
-                  </div>
-                </div>
-                <span className="text-sm text-black/40">{new Date(activity.createdAt).toLocaleString()}</span>
-              </div>
-            ))}
-            {(stats?.recentActivity || []).length === 0 && (
-              <p className="text-center text-black/30 py-8">Nenhuma atividade registrada ainda.</p>
-            )}
+      {/* Merged Transaction Conferencing */}
+      <div className="bg-white p-10 rounded-[56px] border border-black/5 shadow-sm space-y-10">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
+          <div className="space-y-2">
+            <h3 className="text-2xl font-black tracking-tight underline decoration-indigo-600 decoration-4 underline-offset-8">Extrato de Fluxo</h3>
+            <p className="text-black/40 text-sm font-medium">Auditoria financeira detalhada e filtros de busca avançada</p>
           </div>
+          <button 
+            onClick={exportFinancialToCSV}
+            className="flex items-center gap-3 px-8 py-4 bg-[#141414] text-white rounded-[24px] font-black hover:scale-105 active:scale-95 transition-all shadow-2xl shadow-black/20 uppercase tracking-widest text-xs"
+          >
+            <FileDown size={20} /> Exportar CSV
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 p-2">
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-30 ml-2">Seleção de Produto</label>
+            <select value={filterProduct} onChange={e => setFilterProduct(e.target.value)} className="w-full p-5 bg-black/[0.03] rounded-[24px] font-bold outline-none border-2 border-transparent focus:border-indigo-600 focus:bg-white transition-all text-sm">
+              <option value="all">Ver Todos os Produtos</option>
+              {dbProducts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-30 ml-2">Filtro de Cotista</label>
+            <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="w-full p-5 bg-black/[0.03] rounded-[24px] font-bold outline-none border-2 border-transparent focus:border-indigo-600 focus:bg-white transition-all text-sm">
+              <option value="all">Ver Todos os Cotistas</option>
+              {dbClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-30 ml-2">Data Inicial</label>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-5 bg-black/[0.03] rounded-[24px] text-sm font-bold outline-none focus:border-indigo-600 focus:bg-white border-2 border-transparent transition-all" />
+          </div>
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase tracking-widest opacity-30 ml-2">Data Final</label>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-5 bg-black/[0.03] rounded-[24px] text-sm font-bold outline-none focus:border-indigo-600 focus:bg-white border-2 border-transparent transition-all" />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto min-h-[400px]">
+          <table className="w-full">
+            <thead>
+              <tr className="text-left border-b border-black/5">
+                <th className="pb-6 text-[10px] font-black uppercase opacity-20 px-6">Data</th>
+                <th className="pb-6 text-[10px] font-black uppercase opacity-20 px-6">Categoria</th>
+                <th className="pb-6 text-[10px] font-black uppercase opacity-20 px-6">Especificação</th>
+                <th className="pb-6 text-[10px] font-black uppercase opacity-20 px-6">Titular</th>
+                <th className="pb-6 text-[10px] font-black uppercase opacity-20 px-6 text-right">Montante</th>
+              </tr>
+            </thead>
+            <tbody>
+              {financeLoading ? (
+                <tr><td colSpan={5} className="py-32 text-center opacity-30 italic font-bold text-lg tracking-tight">Carregando registros financeiros...</td></tr>
+              ) : financeData.items.length === 0 ? (
+                <tr><td colSpan={5} className="py-32 text-center opacity-30 italic font-bold">Não detectamos lançamentos para este período e filtros.</td></tr>
+              ) : financeData.items.map((item, idx) => (
+                <tr key={idx} className="group border-b border-black/[0.03] last:border-0 hover:bg-black/[0.01] transition-all">
+                  <td className="py-6 px-6 text-xs font-black font-mono opacity-60">
+                    {item.paid_at ? new Date(item.paid_at).toLocaleDateString('pt-BR') : '-'}
+                  </td>
+                  <td className="py-6 px-6">
+                    <span className={cn(
+                      "px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-[0.1em]",
+                      item.status === 'paid' ? "bg-emerald-50 text-emerald-600" : 
+                      item.status === 'refund' ? "bg-red-50 text-red-600" : "bg-amber-50 text-amber-600"
+                    )}>
+                      {item.status === 'paid' ? 'Crédito' : item.status === 'refund' ? 'Débito' : 'Retenção'}
+                    </span>
+                  </td>
+                  <td className="py-6 px-6 text-sm font-black text-black/80">{item.product_name}</td>
+                  <td className="py-6 px-6 text-sm font-bold text-black/40">{item.owner_name}</td>
+                  <td className={cn(
+                    "py-6 px-6 text-lg font-black text-right font-serif tracking-tighter",
+                    item.status === 'paid' ? "text-emerald-600" : "text-red-500"
+                  )}>
+                    {item.status === 'refund' ? '-' : ''}{formatCurrency(item.amount)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, sub, onClick }: { label: string, value: string, sub: string, onClick?: () => void }) {
+function StatCard({ label, value, sub, onClick, color, bg = "bg-white" }: { label: string, value: string, sub?: string, onClick?: () => void, color?: string, bg?: string }) {
   return (
     <div 
       onClick={onClick}
       className={cn(
-        "bg-white p-6 sm:p-8 rounded-3xl border border-black/5 shadow-sm h-full flex flex-col justify-between",
-        onClick && "cursor-pointer hover:bg-black/5 transition-all"
+        "p-8 rounded-[40px] border border-black/5 shadow-sm transition-all duration-300 h-full flex flex-col justify-center space-y-1",
+        bg,
+        onClick && "cursor-pointer hover:bg-black/[0.02] hover:shadow-md active:scale-[0.98]"
       )}
     >
-      <div>
-        <p className="text-[10px] sm:text-xs font-bold uppercase tracking-widest opacity-50 mb-2 truncate">{label}</p>
-        <p className="text-2xl sm:text-4xl font-bold tracking-tighter mb-2 break-words leading-tight">{value}</p>
-      </div>
-      <p className="text-[10px] sm:text-xs text-emerald-600 font-medium truncate">{sub}</p>
+      <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">{label}</p>
+      <p className={cn("text-3xl font-black font-serif leading-tight", color || "text-black")}>{value}</p>
+      {sub && <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 opacity-80">{sub}</p>}
     </div>
   );
 }
@@ -3250,12 +3457,14 @@ function ProductDetail() {
   const dynamicInstallmentCount = getDynamicInstallmentCount();
 
   useEffect(() => {
-    if (product?.payment_type === 'recurrent') {
+    if (!product || purchaseSuccess) return;
+    
+    if (product.payment_type === 'recurrent') {
       setInstallmentCount(dynamicInstallmentCount);
     } else {
       setInstallmentCount(1);
     }
-  }, [product, dynamicInstallmentCount]);
+  }, [product?.id, dynamicInstallmentCount, purchaseSuccess]);
 
   useEffect(() => {
     if (!id || !tenantId) return;
@@ -4012,6 +4221,9 @@ function ProductDetail() {
             product_id: product.id,
             product_name: product.name,
             quotas: selectedQuotas.map(id => quotas.find(q => q.id === id)?.number || id),
+            payment_type: product.payment_type,
+            installment_count: installmentCount,
+            total_value: quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0),
             signed_at: now.toISOString(),
             term_content: termContent,
             createdAt: serverTimestamp()
@@ -4098,11 +4310,29 @@ function ProductDetail() {
     const splitQuotas = doc.splitTextToSize(quotasStr, pageWidth - (margin * 2) - 15);
     doc.text(quotaLabel, margin, cursorY);
     doc.text(splitQuotas, margin + 15, cursorY);
-    cursorY += (splitQuotas.length * 5) + 2;
+    cursorY += (splitQuotas.length * 5) + 5;
 
-    doc.text(`Valor Total: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
-    cursorY += 7;
-    doc.text(`Parcelamento: ${installmentCount}x de ${(totalValue / installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+    if (product?.payment_type === 'recurrent') {
+      doc.text(`Valor por Cota: ${product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / mês`, margin, cursorY);
+      cursorY += 7;
+      doc.text(`Total Mensal: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / mês`, margin, cursorY);
+      cursorY += 7;
+      doc.setFont("helvetica", "bold");
+      doc.text(`Condição de Pagamento: Cobrança Recorrente Mensal Fixa`, margin, cursorY);
+      doc.setFont("helvetica", "normal");
+    } else if (installmentCount === 1) {
+      doc.text(`Valor Total: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+      cursorY += 7;
+      doc.setFont("helvetica", "bold");
+      doc.text(`Condição de Pagamento: Pagamento à Vista`, margin, cursorY);
+      doc.setFont("helvetica", "normal");
+    } else {
+      doc.text(`Valor Total da Aquisição: ${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+      cursorY += 7;
+      doc.setFont("helvetica", "bold");
+      doc.text(`Condição de Pagamento: Parcelado em ${installmentCount}x de ${(totalValue / installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, margin, cursorY);
+      doc.setFont("helvetica", "normal");
+    }
     cursorY += 15;
 
     if (cursorY > pageHeight - 40) {
@@ -4693,24 +4923,31 @@ function ProductDetail() {
 
                         <div className="bg-black/5 p-6 rounded-2xl space-y-2">
                           <div className="flex justify-between text-sm">
-                            <span className="opacity-60">Valor Total</span>
+                            <span className="opacity-60">
+                              {product?.payment_type === 'recurrent' ? 'Soma das Mensalidades' : 'Valor Total'}
+                            </span>
                             <span className="font-bold">
-                              {product?.payment_type === 'recurrent' 
-                                ? (quotas.find(q => selectedQuotas.includes(q.id))?.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ' / mês')
-                                : (quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }))}
+                              {quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              {product?.payment_type === 'recurrent' && ' / mês'}
                             </span>
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="opacity-60">
-                              {product?.payment_type === 'recurrent' ? 'Valor Mensal' : 'Valor por Parcela'}
+                              {product?.payment_type === 'recurrent' ? 'Total a Pagar Hoje' : (installmentCount === 1 ? 'Total à Vista' : 'Valor por Parcela')}
                             </span>
                             <span className="font-bold text-emerald-600">
                               {(product?.payment_type === 'recurrent'
-                                ? (quotas.find(q => selectedQuotas.includes(q.id))?.price || 0)
+                                ? quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0)
                                 : (quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0) / installmentCount)
                               ).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
                           </div>
+                          
+                          {installmentCount > 1 && product?.payment_type !== 'recurrent' && (
+                            <p className="text-[10px] text-black/40 text-right mt-1 italic">
+                              Parcelamento em {installmentCount}x
+                            </p>
+                          )}
                           
                           <div className="pt-4 mt-2 border-t border-black/10">
                             <p className="text-[10px] font-bold uppercase tracking-widest opacity-40 mb-2">
@@ -5704,31 +5941,26 @@ function ClientsList() {
   const downloadClientTerm = (client: User, products: any[]) => {
     if (!client.signed_term_at) return alert('Este cliente ainda não assinou o termo.');
     
-    const quotasStr = products.map((p: any) => {
-      const numbers = Array.isArray(p.quotaNumbers) 
-        ? p.quotaNumbers.map((n: string) => `#${n}`).join(', ') 
-        : (p.quotaNumbers ? p.quotaNumbers.split(',').map((n: string) => `#${n}`).join(', ') : '');
-      return `${p.quotaCount} cota(s) de ${p.name} (${numbers})`;
-    }).join(', ');
-
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const margin = 14;
     let cursorY = 20;
 
+    // 1. Term Header
     doc.setFontSize(16);
     doc.setFont("helvetica", "bold");
     doc.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
     cursorY += 10;
 
+    // 2. Term Content
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(50, 50, 50);
     const splitTerm = doc.splitTextToSize(termContent, pageWidth - (margin * 2));
     
     for (let i = 0; i < splitTerm.length; i++) {
-      if (cursorY > pageHeight - 40) {
+      if (cursorY > pageHeight - 30) {
         doc.addPage();
         cursorY = 20;
       }
@@ -5737,11 +5969,12 @@ function ClientsList() {
     }
 
     cursorY += 10;
-    if (cursorY > pageHeight - 60) {
+    if (cursorY > pageHeight - 80) {
       doc.addPage();
       cursorY = 20;
     }
 
+    // 3. Signature & Details Section
     doc.setDrawColor(200, 200, 200);
     doc.line(margin, cursorY, pageWidth - margin, cursorY);
     cursorY += 10;
@@ -5749,7 +5982,7 @@ function ClientsList() {
     doc.setFontSize(14);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(0, 0, 0);
-    doc.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+    doc.text("ASSINATURA ELETRÔNICA E DETALHES", margin, cursorY);
     cursorY += 10;
 
     doc.setFontSize(11);
@@ -5759,21 +5992,55 @@ function ClientsList() {
     doc.text(`CPF: ${client.cpf || 'Não informado'}`, margin, cursorY);
     cursorY += 7;
     doc.text(`Data do Aceite: ${new Date(client.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
+    cursorY += 12;
+    
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("Resumo de Aquisições e Condições:", margin, cursorY);
     cursorY += 7;
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
     
-    const productLabel = "Produtos/Cotas: ";
-    const productValue = quotasStr || 'Nenhuma cota registrada no momento da assinatura.';
-    const splitProducts = doc.splitTextToSize(productValue, pageWidth - (margin * 2) - 35); // 35 is approx width of label
-    
-    doc.text(productLabel, margin, cursorY);
-    doc.text(splitProducts, margin + 35, cursorY);
-    cursorY += (splitProducts.length * 5) + 2;
-    
+    products.forEach((p: any) => {
+      if (cursorY > pageHeight - 40) {
+        doc.addPage();
+        cursorY = 20;
+      }
+
+      doc.setFont("helvetica", "bold");
+      doc.text(`Produto: ${p.name}`, margin, cursorY);
+      cursorY += 5;
+      doc.setFont("helvetica", "normal");
+      
+      const numbers = Array.isArray(p.quotaNumbers) 
+        ? p.quotaNumbers.map((n: string) => `#${n}`).join(', ') 
+        : (p.quotaNumbers ? p.quotaNumbers.split(',').map((n: string) => `#${n}`).join(', ') : '');
+      
+      const quotasText = `Cotas: ${numbers}`;
+      const splitQuotas = doc.splitTextToSize(quotasText, pageWidth - (margin * 2));
+      doc.text(splitQuotas, margin, cursorY);
+      cursorY += (splitQuotas.length * 5) + 2;
+
+      let conditionText = '';
+      if (p.payment_type === 'recurrent') {
+        conditionText = `Condição: Cobrança Recorrente Mensal de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / mês`;
+      } else if (p.installmentCount > 1) {
+        conditionText = `Condição: Parcelado em ${p.installmentCount}x de ${(p.totalValue / p.installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (Total: ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
+      } else {
+        conditionText = `Condição: Pagamento à Vista no valor de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+      }
+      doc.text(conditionText, margin, cursorY);
+      cursorY += 10;
+    });
+
     if (cursorY > pageHeight - 20) {
       doc.addPage();
       cursorY = 20;
     }
     
+    cursorY += 5;
+    doc.setFontSize(9);
     doc.text(`Autenticação Digital ID: ${client.id}-${new Date(client.signed_term_at).getTime()}`, margin, cursorY);
     
     doc.save(`termo_assinado_${client.name.replace(/\s+/g, '_').toLowerCase()}.pdf`);
@@ -5797,39 +6064,42 @@ function ClientsList() {
         const installmentsSnap = await getDocs(query(installmentsRef, where('owner_id', '==', id)));
         const installments = installmentsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+        const productsSnap = await getDocs(collection(db, 'tenants', tenantId, 'products'));
+        const allProducts = Object.fromEntries(productsSnap.docs.map(d => [d.id, d.data()]));
+
         // Group quotas by product
         const productGroups: { [key: string]: any } = {};
         for (const q of quotas as any[]) {
           if (!productGroups[q.product_id]) {
-            let pName = q.product_name || 'Produto';
-            
-            // If name is missing, try to fetch from products collection
-            if (pName === 'Produto') {
-              try {
-                const pDoc = await getDoc(doc(db, 'tenants', tenantId, 'products', q.product_id));
-                if (pDoc.exists()) {
-                  pName = pDoc.data().name;
-                }
-              } catch (e) {
-                console.error("Error fetching product name:", e);
-              }
-            }
-
+            const pData = allProducts[q.product_id];
             productGroups[q.product_id] = {
-              name: pName,
+              name: pData?.name || q.product_name || 'Produto',
+              payment_type: pData?.payment_type || 'cash',
               quotaCount: 0,
               quotaNumbers: [],
-              pendingValue: 0
+              pendingValue: 0,
+              totalValue: 0,
+              installmentCount: 0
             };
           }
           productGroups[q.product_id].quotaCount++;
           productGroups[q.product_id].quotaNumbers.push(q.number);
+          productGroups[q.product_id].totalValue += (q.price || 0);
         }
 
-        // Add pending values from installments
+        // Add installment count and pending values from installments
         installments.forEach((inst: any) => {
-          if (inst.status === 'pending' && productGroups[inst.product_id]) {
-            productGroups[inst.product_id].pendingValue += inst.amount;
+          if (productGroups[inst.product_id]) {
+            // Find max installments per quota
+            const qInstCount = installments.filter((i: any) => i.quota_id === inst.quota_id).length;
+            productGroups[inst.product_id].installmentCount = Math.max(
+              productGroups[inst.product_id].installmentCount,
+              qInstCount
+            );
+            
+            if (inst.status === 'pending') {
+              productGroups[inst.product_id].pendingValue += inst.amount;
+            }
           }
         });
 
@@ -6275,26 +6545,46 @@ function TermsPage() {
       const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       
       const productsRef = collection(db, 'tenants', tenantId, 'products');
-      const enrichedQuotas = await Promise.all(quotasData.map(async (quota: any) => {
-        const productSnap = await getDoc(doc(productsRef, quota.product_id));
-        if (productSnap.exists()) {
-          const pData = productSnap.data();
-          return { ...quota, productName: pData.name };
-        }
-        return quota;
-      }));
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      
+      const [productsSnap, instSnap] = await Promise.all([
+        getDocs(productsRef),
+        getDocs(query(installmentsRef, where('owner_id', '==', user.id)))
+      ]);
+      
+      const allProducts = Object.fromEntries(productsSnap.docs.map(d => [d.id, d.data()]));
+      const allInstallments = instSnap.docs.map(d => d.data());
 
       const productGroups: { [key: string]: any } = {};
-      enrichedQuotas.forEach((q: any) => {
+      quotasData.forEach((q: any) => {
         if (!productGroups[q.product_id]) {
-          productGroups[q.product_id] = { name: q.productName || 'Produto', numbers: [] };
+          const pData = allProducts[q.product_id];
+          productGroups[q.product_id] = { 
+            name: pData?.name || q.product_name || 'Produto', 
+            numbers: [],
+            totalValue: 0,
+            paymentType: pData?.payment_type || 'cash',
+            installmentCount: 0
+          };
         }
         productGroups[q.product_id].numbers.push(q.number);
+        productGroups[q.product_id].totalValue += (q.price || 0);
+
+        const qInsts = allInstallments.filter(i => i.quota_id === q.id);
+        productGroups[q.product_id].installmentCount = Math.max(productGroups[q.product_id].installmentCount, qInsts.length);
       });
 
-      const quotaLines = Object.values(productGroups).map((p: any) => 
-        `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')});`
-      );
+      const quotaLines = Object.values(productGroups).map((p: any) => {
+        let planInfo = '';
+        if (p.paymentType === 'recurrent') {
+          planInfo = ` [Recorrente: ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês]`;
+        } else if (p.installmentCount > 1) {
+          planInfo = ` [Parcelado: ${p.installmentCount}x de ${(p.totalValue / p.installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}]`;
+        } else {
+          planInfo = ` [À Vista: ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}]`;
+        }
+        return `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')})${planInfo};`;
+      });
 
       const docPdf = new jsPDF();
       const pageWidth = docPdf.internal.pageSize.getWidth();
@@ -6302,18 +6592,21 @@ function TermsPage() {
       const margin = 14;
       let cursorY = 20;
 
+      // 1. Term Header
       docPdf.setFontSize(16);
       docPdf.setFont("helvetica", "bold");
       docPdf.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
       cursorY += 10;
 
+      // 2. Term Content
       docPdf.setFontSize(9);
       docPdf.setFont("helvetica", "normal");
       docPdf.setTextColor(50, 50, 50);
-      const splitTerm = docPdf.splitTextToSize(content, pageWidth - (margin * 2));
+      const displayContent = term ? term.content : content;
+      const splitTerm = docPdf.splitTextToSize(displayContent, pageWidth - (margin * 2));
       
       for (let i = 0; i < splitTerm.length; i++) {
-        if (cursorY > pageHeight - 40) {
+        if (cursorY > pageHeight - 30) {
           docPdf.addPage();
           cursorY = 20;
         }
@@ -6322,11 +6615,12 @@ function TermsPage() {
       }
 
       cursorY += 10;
-      if (cursorY > pageHeight - 60) {
+      if (cursorY > pageHeight - 80) {
         docPdf.addPage();
         cursorY = 20;
       }
 
+      // 3. Details & Signature Section
       docPdf.setDrawColor(200, 200, 200);
       docPdf.line(margin, cursorY, pageWidth - margin, cursorY);
       cursorY += 10;
@@ -6334,7 +6628,7 @@ function TermsPage() {
       docPdf.setFontSize(14);
       docPdf.setFont("helvetica", "bold");
       docPdf.setTextColor(0, 0, 0);
-      docPdf.text("ASSINATURA ELETRÔNICA", margin, cursorY);
+      docPdf.text("ASSINATURA ELETRÔNICA E DETALHES", margin, cursorY);
       cursorY += 10;
 
       docPdf.setFontSize(11);
@@ -6348,19 +6642,38 @@ function TermsPage() {
       
       docPdf.setFontSize(11);
       docPdf.setFont("helvetica", "bold");
-      docPdf.text("Produtos/Cotas:", margin, cursorY);
+      docPdf.text("Resumo de Aquisições e Condições:", margin, cursorY);
       cursorY += 7;
 
       docPdf.setFontSize(10);
       docPdf.setFont("helvetica", "normal");
-      quotaLines.forEach(line => {
-        if (cursorY > pageHeight - 20) {
+      
+      Object.values(productGroups).forEach((p: any) => {
+        if (cursorY > pageHeight - 40) {
           docPdf.addPage();
           cursorY = 20;
         }
-        const splitLine = docPdf.splitTextToSize(line, pageWidth - (margin * 2));
-        docPdf.text(splitLine, margin, cursorY);
-        cursorY += (splitLine.length * 5);
+
+        docPdf.setFont("helvetica", "bold");
+        docPdf.text(`Produto: ${p.name}`, margin, cursorY);
+        cursorY += 5;
+        docPdf.setFont("helvetica", "normal");
+        
+        const quotasText = `Cotas: #${p.numbers.join(', #')}`;
+        const splitQuotas = docPdf.splitTextToSize(quotasText, pageWidth - (margin * 2));
+        docPdf.text(splitQuotas, margin, cursorY);
+        cursorY += (splitQuotas.length * 5) + 2;
+
+        let conditionText = '';
+        if (p.paymentType === 'recurrent') {
+          conditionText = `Condição: Cobrança Recorrente Mensal de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / mês`;
+        } else if (p.installmentCount > 1) {
+          conditionText = `Condição: Parcelado em ${p.installmentCount}x de ${(p.totalValue / p.installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (Total: ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
+        } else {
+          conditionText = `Condição: Pagamento à Vista no valor de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+        }
+        docPdf.text(conditionText, margin, cursorY);
+        cursorY += 10;
       });
 
       if (cursorY > pageHeight - 20) {
@@ -6465,277 +6778,11 @@ function TermsPage() {
   );
 }
 
-function FinancialConsole() {
-  const { tenantId } = React.useContext(AuthContext)!;
-  const [data, setData] = useState<{
-    collected: number;
-    refunded: number;
-    retained: number;
-    net: number;
-    items: any[];
-  }>({ collected: 0, refunded: 0, retained: 0, net: 0, items: [] });
-  const [loading, setLoading] = useState(true);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [clients, setClients] = useState<User[]>([]);
-  
-  const [filterProduct, setFilterProduct] = useState('all');
-  const [filterClient, setFilterClient] = useState('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-
-  useEffect(() => {
-    if (!tenantId) return;
-    const fetchBaseData = async () => {
-      const pSnapshot = await getDocs(collection(db, 'tenants', tenantId, 'products'));
-      setProducts(pSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product)));
-      
-      const cSnapshot = await getDocs(query(collection(db, 'tenants', tenantId, 'users'), where('role', '==', 'client')));
-      setClients(cSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as User)));
-    };
-    fetchBaseData();
-  }, [tenantId]);
-
-  useEffect(() => {
-    if (!tenantId) return;
-    setLoading(true);
-    
-    const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
-    let q = query(installmentsRef, where('status', 'in', ['paid', 'refund', 'retention']));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rawItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Installment));
-      
-      // Apply filters in memory for more flexibility with combined conditions if needed, 
-      // but let's try to do what we can.
-      let filtered = rawItems.filter(item => {
-        if (filterProduct !== 'all' && item.product_id !== filterProduct) return false;
-        if (filterClient !== 'all' && item.owner_id !== filterClient) return false;
-        if (startDate && item.paid_at && item.paid_at < startDate) return false;
-        if (endDate && item.paid_at && item.paid_at > endDate + 'T23:59:59') return false;
-        return true;
-      });
-
-      // Sort by date desc
-      filtered.sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
-
-      const collected = filtered.filter(i => i.status === 'paid').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-      const refunded = filtered.filter(i => i.status === 'refund').reduce((acc, i) => acc + Math.abs(Number(i.amount) || 0), 0);
-      const retained = filtered.filter(i => i.status === 'retention').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-      
-      setData({
-        collected,
-        refunded,
-        retained,
-        net: collected - refunded,
-        items: filtered
-      });
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [tenantId, filterProduct, filterClient, startDate, endDate]);
-
-  const chartData = useMemo(() => {
-    const dailyData: { [key: string]: number } = {};
-    data.items.forEach(item => {
-      if (item.status === 'paid') {
-        const date = item.paid_at ? item.paid_at.split('T')[0] : '';
-        if (date) {
-          dailyData[date] = (dailyData[date] || 0) + (Number(item.amount) || 0);
-        }
-      }
-    });
-
-    return Object.entries(dailyData)
-      .map(([date, amount]) => ({
-        rawDate: date,
-        date: new Date(date + 'T12:00:00').toLocaleDateString('pt-BR'),
-        amount
-      }))
-      .sort((a, b) => a.rawDate.localeCompare(b.rawDate));
-  }, [data.items]);
-
-  const exportToCSV = () => {
-    const headers = ['Data', 'Tipo', 'Produto', 'Cotista', 'Valor', 'Motivo'];
-    const rows = data.items.map(i => [
-      i.paid_at ? new Date(i.paid_at).toLocaleDateString() : '-',
-      i.status === 'paid' ? 'Pagamento' : i.status === 'refund' ? 'Reembolso' : 'Retenção',
-      i.product_name,
-      i.owner_name,
-      i.amount,
-      i.reason || '-'
-    ]);
-    
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + headers.join(",") + "\n"
-      + rows.map(e => e.join(",")).join("\n");
-    
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `financeiro_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  return (
-    <div className="space-y-8 pb-20">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-3xl font-black tracking-tight text-black">Conferência Financeira</h2>
-          <p className="text-black/40 text-sm font-medium">Consolidado dinâmico dos registros do sistema</p>
-        </div>
-        <button 
-          onClick={exportToCSV}
-          className="flex items-center gap-2 px-6 py-3 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
-        >
-          <FileDown size={20} /> Exportar Relatório
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <FinanceCard label="Total Arrecadado" value={data.collected} color="text-emerald-600" />
-        <FinanceCard label="Total Devolvido" value={data.refunded} color="text-red-500" />
-        <FinanceCard label="Total Retido" value={data.retained} color="text-amber-600" />
-        <FinanceCard label="Saldo Líquido" value={data.net} color="text-indigo-600" bg="bg-indigo-50" />
-      </div>
-
-      {chartData.length > 0 && (
-        <div className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold">Resumo Coletado por Dia</h3>
-            <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Evolução Faturamento</p>
-          </div>
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#14141410" />
-                <XAxis 
-                  dataKey="date" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fontSize: 10, fontWeight: 'bold' }} 
-                  dy={10}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fontSize: 10, fontWeight: 'bold' }}
-                  tickFormatter={(val) => `R$ ${val}`}
-                />
-                <Tooltip 
-                  contentStyle={{ borderRadius: '24px', border: 'none', boxShadow: '0 20px 50px rgba(0,0,0,0.1)', padding: '20px' }}
-                  itemStyle={{ fontWeight: 'bold', color: '#141414' }}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="amount" 
-                  name="Coletado"
-                  stroke="#4f46e5" 
-                  strokeWidth={4} 
-                  dot={{ r: 6, fill: '#4f46e5', strokeWidth: 2, stroke: '#fff' }}
-                  activeDot={{ r: 8, strokeWidth: 0 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-white p-8 rounded-[40px] border border-black/5 shadow-sm space-y-6">
-        <div className="flex flex-wrap gap-4">
-          <div className="flex-1 min-w-[200px]">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Produto</label>
-            <select 
-              value={filterProduct} 
-              onChange={e => setFilterProduct(e.target.value)}
-              className="w-full p-4 bg-black/5 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-indigo-600 transition-all text-sm"
-            >
-              <option value="all">Todos os Produtos</option>
-              {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
-          <div className="flex-1 min-w-[200px]">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Cotista</label>
-            <select 
-              value={filterClient} 
-              onChange={e => setFilterClient(e.target.value)}
-              className="w-full p-4 bg-black/5 rounded-2xl font-bold outline-none border-2 border-transparent focus:border-indigo-600 transition-all text-sm"
-            >
-              <option value="all">Todos os Cotistas</option>
-              {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data Início</label>
-            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-4 bg-black/5 rounded-2xl text-sm font-bold" />
-          </div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Data Fim</label>
-            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-4 bg-black/5 rounded-2xl text-sm font-bold" />
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="text-left border-b border-black/5">
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Data</th>
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Tipo</th>
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Produto</th>
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Cotista</th>
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4 text-right">Valor</th>
-                <th className="pb-4 text-[10px] font-black uppercase opacity-30 px-4">Referência</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={6} className="py-20 text-center opacity-20">Carregando registros financeiros...</td></tr>
-              ) : data.items.map((item) => (
-                <tr key={item.id} className="border-b border-black/5 hover:bg-black/[0.02] transition-all group">
-                  <td className="py-4 px-4 text-xs font-medium opacity-60">
-                    {item.paid_at ? new Date(item.paid_at).toLocaleDateString() : '-'}
-                  </td>
-                  <td className="py-4 px-4">
-                    <span className={cn(
-                      "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                      item.status === 'paid' ? "bg-emerald-100 text-emerald-600" : 
-                      item.status === 'refund' ? "bg-red-100 text-red-600" : "bg-amber-100 text-amber-600"
-                    )}>
-                      {item.status === 'paid' ? 'Pagamento' : item.status === 'refund' ? 'Reembolso' : 'Retenção'}
-                    </span>
-                  </td>
-                  <td className="py-4 px-4 text-xs font-bold">{item.product_name}</td>
-                  <td className="py-4 px-4 text-xs font-bold">{item.owner_name}</td>
-                  <td className={cn(
-                    "py-4 px-4 text-xs font-black text-right",
-                    item.status === 'refund' ? "text-red-500" : "text-black"
-                  )}>
-                    {item.status === 'refund' && '-'}
-                    {Math.abs(item.amount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </td>
-                  <td className="py-4 px-4 text-[10px] opacity-40 max-w-[200px] truncate" title={item.reason || `Cota #${item.quota_number}`}>
-                    {item.reason || `Cota #${item.quota_number}`}
-                  </td>
-                </tr>
-              ))}
-              {!loading && data.items.length === 0 && (
-                <tr><td colSpan={6} className="py-20 text-center opacity-20">Nenhum registro encontrado para estes filtros.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function FinanceCard({ label, value, color, bg = "bg-white" }: { label: string, value: number, color: string, bg?: string }) {
   return (
-    <div className={cn("p-8 rounded-[40px] border border-black/5 shadow-sm space-y-2", bg)}>
+    <div className={cn("p-8 rounded-[40px] border border-black/5 shadow-sm space-y-1 transition-all duration-300", bg)}>
       <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">{label}</p>
-      <p className={cn("text-2xl font-black font-serif", color)}>
+      <p className={cn("text-3xl font-black font-serif leading-tight", color)}>
         {value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
       </p>
     </div>
@@ -6837,93 +6884,141 @@ function MyQuotas() {
     };
   }, [tenantId, user]);
 
-  const downloadMyTerm = () => {
-    if (!user.signed_term_at) return alert('Você ainda não assinou o termo.');
+  const downloadMyTerm = async () => {
+    if (!user.signed_term_at || !tenantId) return alert('Você ainda não assinou o termo.');
     
-    const productGroups: { [key: string]: any } = {};
-    quotas.forEach((q: any) => {
-      if (!productGroups[q.product_id]) {
-        productGroups[q.product_id] = { name: q.productName, numbers: [] };
+    try {
+      // Fetch relevant data to reconstruct the plan info
+      const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+      const instSnap = await getDocs(query(installmentsRef, where('owner_id', '==', user.id)));
+      const allInstallments = instSnap.docs.map(d => d.data());
+
+      const productsRef = collection(db, 'tenants', tenantId, 'products');
+      const prodSnap = await getDocs(productsRef);
+      const allProductsData = Object.fromEntries(prodSnap.docs.map(d => [d.id, d.data()]));
+
+      const productGroups: { [key: string]: any } = {};
+      quotas.forEach((q: any) => {
+        if (!productGroups[q.product_id]) {
+          const pData = allProductsData[q.product_id];
+          productGroups[q.product_id] = { 
+            name: pData?.name || q.productName || 'Produto', 
+            numbers: [],
+            totalValue: 0,
+            paymentType: pData?.payment_type || 'cash',
+            installmentCount: 0
+          };
+        }
+        productGroups[q.product_id].numbers.push(q.number);
+        productGroups[q.product_id].totalValue += (q.price || 0);
+        
+        const qInsts = allInstallments.filter(i => i.quota_id === q.id);
+        productGroups[q.product_id].installmentCount = Math.max(productGroups[q.product_id].installmentCount, qInsts.length);
+      });
+
+      const docPdf = new jsPDF();
+      const pageWidth = docPdf.internal.pageSize.getWidth();
+      const pageHeight = docPdf.internal.pageSize.getHeight();
+      const margin = 14;
+      let cursorY = 20;
+
+      // 1. Term Header
+      docPdf.setFontSize(16);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
+      cursorY += 10;
+
+      // 2. Term Content
+      docPdf.setFontSize(9);
+      docPdf.setFont("helvetica", "normal");
+      docPdf.setTextColor(50, 50, 50);
+      const splitTerm = docPdf.splitTextToSize(termContent || 'Termos de adesão...', pageWidth - (margin * 2));
+      
+      for (let i = 0; i < splitTerm.length; i++) {
+        if (cursorY > pageHeight - 30) {
+          docPdf.addPage();
+          cursorY = 20;
+        }
+        docPdf.text(splitTerm[i], margin, cursorY);
+        cursorY += 5;
       }
-      productGroups[q.product_id].numbers.push(q.number);
-    });
 
-    const quotaLines = Object.values(productGroups).map((p: any) => 
-      `${p.numbers.length} cota(s) de ${p.name} (#${p.numbers.join(', #')});`
-    );
-
-    const docPdf = new jsPDF();
-    const pageWidth = docPdf.internal.pageSize.getWidth();
-    const pageHeight = docPdf.internal.pageSize.getHeight();
-    const margin = 14;
-    let cursorY = 20;
-
-    docPdf.setFontSize(16);
-    docPdf.setFont("helvetica", "bold");
-    docPdf.text("TERMO DE CIENTIFICAÇÃO E ADESÃO AO BOLÃO", pageWidth / 2, cursorY, { align: 'center' });
-    cursorY += 10;
-
-    docPdf.setFontSize(9);
-    docPdf.setFont("helvetica", "normal");
-    docPdf.setTextColor(50, 50, 50);
-    const splitTerm = docPdf.splitTextToSize(termContent || 'Termos de adesão...', pageWidth - (margin * 2));
-    
-    for (let i = 0; i < splitTerm.length; i++) {
-      if (cursorY > pageHeight - 40) {
+      cursorY += 10;
+      if (cursorY > pageHeight - 80) {
         docPdf.addPage();
         cursorY = 20;
       }
-      docPdf.text(splitTerm[i], margin, cursorY);
-      cursorY += 5;
-    }
 
-    cursorY += 10;
-    docPdf.setDrawColor(200, 200, 200);
-    docPdf.line(margin, cursorY, pageWidth - margin, cursorY);
-    cursorY += 10;
+      // 3. Signature & Details Section
+      docPdf.setDrawColor(200, 200, 200);
+      docPdf.line(margin, cursorY, pageWidth - margin, cursorY);
+      cursorY += 10;
 
-    docPdf.setFontSize(14);
-    docPdf.setFont("helvetica", "bold");
-    docPdf.setTextColor(0, 0, 0);
-    docPdf.text("ASSINATURA ELETRÔNICA", margin, cursorY);
-    cursorY += 10;
+      docPdf.setFontSize(14);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.setTextColor(0, 0, 0);
+      docPdf.text("ASSINATURA ELETRÔNICA E DETALHES", margin, cursorY);
+      cursorY += 10;
 
-    docPdf.setFontSize(11);
-    docPdf.setFont("helvetica", "normal");
-    docPdf.text(`Participante: ${user.name}`, margin, cursorY);
-    cursorY += 7;
-    docPdf.text(`CPF: ${user.cpf || 'Não informado'}`, margin, cursorY);
-    cursorY += 7;
-    docPdf.text(`Data do Aceite: ${new Date(user.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
-    cursorY += 10;
-    
-    docPdf.setFontSize(11);
-    docPdf.setFont("helvetica", "bold");
-    docPdf.text("Produtos/Cotas:", margin, cursorY);
-    cursorY += 7;
+      docPdf.setFontSize(11);
+      docPdf.setFont("helvetica", "normal");
+      docPdf.text(`Participante: ${user.name}`, margin, cursorY);
+      cursorY += 7;
+      docPdf.text(`CPF: ${user.cpf || 'Não informado'}`, margin, cursorY);
+      cursorY += 7;
+      docPdf.text(`Data do Aceite Original: ${new Date(user.signed_term_at).toLocaleString('pt-BR')}`, margin, cursorY);
+      cursorY += 12;
 
-    docPdf.setFontSize(10);
-    docPdf.setFont("helvetica", "normal");
-    quotaLines.forEach(line => {
+      docPdf.setFontSize(11);
+      docPdf.setFont("helvetica", "bold");
+      docPdf.text("Resumo de Aquisições e Condições:", margin, cursorY);
+      cursorY += 7;
+
+      docPdf.setFontSize(10);
+      docPdf.setFont("helvetica", "normal");
+      
+      Object.values(productGroups).forEach((p: any) => {
+        if (cursorY > pageHeight - 40) {
+          docPdf.addPage();
+          cursorY = 20;
+        }
+
+        docPdf.setFont("helvetica", "bold");
+        docPdf.text(`Produto: ${p.name}`, margin, cursorY);
+        cursorY += 5;
+        docPdf.setFont("helvetica", "normal");
+        
+        const quotasText = `Cotas: #${p.numbers.join(', #')}`;
+        const splitQuotas = docPdf.splitTextToSize(quotasText, pageWidth - (margin * 2));
+        docPdf.text(splitQuotas, margin, cursorY);
+        cursorY += (splitQuotas.length * 5) + 2;
+
+        let conditionText = '';
+        if (p.paymentType === 'recurrent') {
+          conditionText = `Condição: Cobrança Recorrente Mensal de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / mês`;
+        } else if (p.installmentCount > 1) {
+          conditionText = `Condição: Parcelado em ${p.installmentCount}x de ${(p.totalValue / p.installmentCount).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} (Total: ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`;
+        } else {
+          conditionText = `Condição: Pagamento à Vista no valor de ${p.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+        }
+        docPdf.text(conditionText, margin, cursorY);
+        cursorY += 10;
+      });
+
       if (cursorY > pageHeight - 20) {
         docPdf.addPage();
         cursorY = 20;
       }
-      const splitLine = docPdf.splitTextToSize(line, pageWidth - (margin * 2));
-      docPdf.text(splitLine, margin, cursorY);
-      cursorY += (splitLine.length * 5);
-    });
 
-    if (cursorY > pageHeight - 20) {
-      docPdf.addPage();
-      cursorY = 20;
+      cursorY += 5;
+      docPdf.setFontSize(9);
+      docPdf.text(`Autenticação Digital ID: ${user.id}-${new Date(user.signed_term_at).getTime()}`, margin, cursorY);
+      
+      docPdf.save(`meu_termo_assinado.pdf`);
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao gerar termo.');
     }
-
-    cursorY += 5;
-    docPdf.setFontSize(9);
-    docPdf.text(`Autenticação Digital ID: ${user.id}-${new Date(user.signed_term_at).getTime()}`, margin, cursorY);
-    
-    docPdf.save(`meu_termo_assinado.pdf`);
   };
 
   return (
@@ -7264,6 +7359,7 @@ function PaymentManagement() {
   const [showRefundModal, setShowRefundModal] = useState<string | null>(null);
   const [refundReason, setRefundReason] = useState('');
   const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
+  const [isProcessing, setIsProcessing] = useState(false);
 
   if (user?.role === 'client') return <Navigate to="/my-payments" />;
 
@@ -7272,7 +7368,7 @@ function PaymentManagement() {
     const q = query(
       collection(db, 'tenants', tenantId, 'installments'), 
       where('status', '==', activeTab === 'pending' ? 'pending' : 'paid'),
-      orderBy('paid_at', 'desc'),
+      orderBy(activeTab === 'pending' ? 'due_date' : 'paid_at', activeTab === 'pending' ? 'asc' : 'desc'),
       limit(activeTab === 'received' ? 100 : 1000)
     );
     
@@ -7374,9 +7470,9 @@ function PaymentManagement() {
   };
 
   const handleMarkAsPaid = async (ids: string[]) => {
-    if (!tenantId) return;
-    if (!confirm(`Deseja confirmar o recebimento destas ${ids.length} parcelas?`)) return;
+    if (!tenantId || isProcessing) return;
     
+    setIsProcessing(true);
     try {
       const batch = writeBatch(db);
       const now = new Date().toISOString();
@@ -7438,6 +7534,8 @@ function PaymentManagement() {
     } catch (err) {
       console.error(err);
       alert('Erro ao confirmar pagamentos');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -7510,9 +7608,10 @@ function PaymentManagement() {
                   <td className="p-6 text-right">
                     <button 
                       onClick={() => handleMarkAsPaid(group.ids)}
-                      className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold hover:scale-105 transition-all"
+                      disabled={isProcessing}
+                      className="px-4 py-2 bg-black text-white rounded-xl text-xs font-bold hover:scale-105 transition-all disabled:opacity-50 disabled:scale-100"
                     >
-                      Confirmar
+                      {isProcessing ? 'Processando...' : 'Confirmar'}
                     </button>
                   </td>
                 </tr>
