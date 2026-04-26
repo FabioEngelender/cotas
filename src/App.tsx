@@ -79,6 +79,16 @@ const maskCEP = (value: string) => {
     .replace(/(-\d{3})\d+?$/, '$1');
 };
 
+const maskCNPJ = (value: string) => {
+  return value
+    .replace(/\D/g, '')
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1/$2')
+    .replace(/(\d{4})(\d)/, '$1-$2')
+    .slice(0, 18);
+};
+
 import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment, deleteField } from 'firebase/firestore';
@@ -483,7 +493,7 @@ function InviteModal({ isOpen, onClose, tenantId, userRole }: { isOpen: boolean,
         animate={{ scale: 1, opacity: 1 }}
         className="relative w-[95%] sm:w-full max-w-md bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
       >
-        <h3 className="text-2xl font-bold mb-6">Convidar para a Loja</h3>
+        <h3 className="text-2xl font-bold mb-6">{userRole === 'client' ? 'Convidar Amigo' : 'Convidar para a Loja'}</h3>
         <div className="space-y-4">
           {links.map((link, i) => (
             <div key={i} className="p-4 bg-black/5 rounded-2xl space-y-2">
@@ -591,7 +601,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
           </button>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2">
+        <nav className="p-4 space-y-2 overflow-y-auto">
           {user.role === 'admin' && (
             <SidebarLink to="/dashboard" icon={<LayoutDashboard size={20} />} label="Painel" isOpen={showLabels} />
           )}
@@ -625,7 +635,7 @@ function AuthenticatedApp({ settings }: { settings: any }) {
             )}
           >
             <div className="text-indigo-600"><UserPlus size={20} /></div>
-            {showLabels && <span className="font-medium">Convidar</span>}
+            {showLabels && <span className="font-medium">{user.role === 'client' ? 'Convidar Amigo' : 'Convidar'}</span>}
           </button>
         </nav>
 
@@ -702,18 +712,20 @@ function AdBanner({ slot, showLabels }: { slot: string, showLabels: boolean }) {
   if (!showLabels) return null;
 
   return (
-    <div className="mt-auto p-4 border-t border-black/5 overflow-hidden min-h-[50px]">
-      <p className="text-[10px] font-bold uppercase tracking-widest opacity-20 mb-2 text-center">Publicidade</p>
-      {/* 
-          IMPORTANT: Replace ca-pub-XXXXXXXXXXXXXXXX with your actual Publisher ID 
-          and your-ad-slot-id with your actual Ad Slot ID.
-      */}
-      <ins className="adsbygoogle"
-           style={{ display: 'block' }}
-           data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
-           data-ad-slot={slot}
-           data-ad-format="auto"
-           data-full-width-responsive="true"></ins>
+    <div className="flex-1 flex flex-col p-4 border-t border-black/5 overflow-hidden min-h-[100px]">
+      <p className="text-[10px] font-bold uppercase tracking-widest opacity-20 mb-2 text-center shrink-0">Publicidade</p>
+      <div className="flex-1 bg-black/[0.02] rounded-[24px] flex items-center justify-center relative min-h-[80px]">
+        {/* 
+            IMPORTANT: Replace ca-pub-XXXXXXXXXXXXXXXX with your actual Publisher ID 
+            and your-ad-slot-id with your actual Ad Slot ID.
+        */}
+        <ins className="adsbygoogle"
+             style={{ display: 'block', width: '100%', height: '100%' }}
+             data-ad-client="ca-pub-XXXXXXXXXXXXXXXX"
+             data-ad-slot={slot}
+             data-ad-format="auto"
+             data-full-width-responsive="true"></ins>
+      </div>
     </div>
   );
 }
@@ -2121,12 +2133,14 @@ function SettingsPage() {
       // Use updateDoc to avoid "undefined" errors and preserve other fields
       await updateDoc(doc(db, 'tenants', tenantId, 'settings', 'general'), {
         app_name: settings.app_name,
+        cnpj: settings.cnpj || '',
         image_url: settings.image_url || ''
       });
 
       // 2. Update tenant name and image (this reflects on the "Bem-vindos" / Tenant Selection screen)
       await updateDoc(doc(db, 'tenants', tenantId), {
         name: settings.app_name,
+        cnpj: settings.cnpj || '',
         image_url: settings.image_url || ''
       });
 
@@ -2268,6 +2282,16 @@ function SettingsPage() {
                 value={settings.app_name}
                 onChange={e => setSettings({...settings, app_name: e.target.value})}
                 className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold uppercase tracking-widest opacity-50">CNPJ (Opcional)</label>
+              <input 
+                type="text" 
+                value={settings.cnpj || ''}
+                onChange={e => setSettings({...settings, cnpj: maskCNPJ(e.target.value)})}
+                placeholder="00.000.000/0000-00"
+                className="w-full p-4 mt-1 bg-black/5 rounded-2xl border-none focus:ring-2 focus:ring-black/10 transition-all font-mono"
               />
             </div>
             <button 
