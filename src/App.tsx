@@ -7045,6 +7045,8 @@ function PaymentManagement() {
   const [refundReason, setRefundReason] = useState('');
   const { user, tenantId, syncUserInstallments } = React.useContext(AuthContext)!;
   const [isProcessing, setIsProcessing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortMode, setSortMode] = useState<'date' | 'name'>('date');
 
   if (user?.role === 'client') return <Navigate to="/my-payments" />;
 
@@ -7224,42 +7226,109 @@ function PaymentManagement() {
     }
   };
 
+  const filteredPending = useMemo(() => {
+    let result = [...pending];
+    
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(item => 
+        (item.owner_name && item.owner_name.toLowerCase().includes(q)) || 
+        (item.owner_cpf && item.owner_cpf.replace(/\D/g, '').includes(q.replace(/\D/g, '')))
+      );
+    }
+
+    if (sortMode === 'name') {
+      result.sort((a, b) => (a.owner_name || '').localeCompare(b.owner_name || ''));
+    } else {
+      result.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+    }
+
+    return result;
+  }, [pending, searchQuery, sortMode]);
+
+  const filteredReceived = useMemo(() => {
+    let result = [...received];
+    
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(item => 
+        (item.owner_name && item.owner_name.toLowerCase().includes(q)) || 
+        (item.owner_cpf && item.owner_cpf.replace(/\D/g, '').includes(q.replace(/\D/g, '')))
+      );
+    }
+    
+    return result;
+  }, [received, searchQuery]);
+
   return (
     <div className="space-y-8">
-      <header className="flex justify-between items-center">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Gestão de Pagamentos</h2>
           <p className="text-black/50">Baixa manual e estornos de parcelas</p>
         </div>
-        <div className="flex bg-black/5 p-1 rounded-2xl">
-          <button 
-            onClick={() => setActiveTab('pending')}
-            className={cn(
-              "px-6 py-2 rounded-xl text-xs font-bold transition-all",
-              activeTab === 'pending' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
-            )}
-          >
-            Pendentes
-          </button>
-          <button 
-            onClick={() => setActiveTab('received')}
-            className={cn(
-              "px-6 py-2 rounded-xl text-xs font-bold transition-all",
-              activeTab === 'received' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
-            )}
-          >
-            Histórico/Recebidos
-          </button>
+        <div className="flex flex-col sm:flex-row items-center gap-4 w-full md:w-auto">
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
+            <input 
+              type="text"
+              placeholder="Buscar por nome ou CPF..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-4 py-3 bg-black/5 rounded-2xl text-xs outline-none focus:ring-2 focus:ring-black/10 transition-all"
+            />
+          </div>
+          <div className="flex bg-black/5 p-1 rounded-2xl shrink-0">
+            <button 
+              onClick={() => setActiveTab('pending')}
+              className={cn(
+                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                activeTab === 'pending' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
+              )}
+            >
+              Pendentes
+            </button>
+            <button 
+              onClick={() => setActiveTab('received')}
+              className={cn(
+                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                activeTab === 'received' ? "bg-white text-black shadow-sm" : "text-black/40 hover:text-black"
+              )}
+            >
+              Histórico/Recebidos
+            </button>
+          </div>
         </div>
       </header>
 
       {activeTab === 'pending' ? (
         <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
-          <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
-            <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas por Data)</h3>
-            <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-xs font-bold">
-              {pending.length} Grupos
-            </span>
+          <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 min-w-[1000px]">
+            <div>
+              <h3 className="font-bold text-xl">Parcelas Pendentes (Agrupadas)</h3>
+              <p className="text-xs text-black/40">Visualizando {filteredPending.length} grupos encontrados</p>
+            </div>
+            
+            <div className="flex items-center gap-2 bg-black/5 p-1 rounded-xl">
+              <button 
+                onClick={() => setSortMode('date')}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-[10px] font-bold transition-all",
+                  sortMode === 'date' ? "bg-white text-black shadow-sm" : "text-black/40"
+                )}
+              >
+                Por Vencimento
+              </button>
+              <button 
+                onClick={() => setSortMode('name')}
+                className={cn(
+                  "px-4 py-1.5 rounded-lg text-[10px] font-bold transition-all",
+                  sortMode === 'name' ? "bg-white text-black shadow-sm" : "text-black/40"
+                )}
+              >
+                Ordem Alfabética
+              </button>
+            </div>
           </div>
           <table className="w-full text-left min-w-[1000px]">
             <thead>
@@ -7273,7 +7342,7 @@ function PaymentManagement() {
               </tr>
             </thead>
             <tbody>
-              {pending.map((group, idx) => (
+              {filteredPending.map((group, idx) => (
                 <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
                   <td className="p-6 text-sm font-bold">{group.owner_name}</td>
                   <td className="p-6 text-sm font-mono">{group.owner_cpf}</td>
@@ -7301,7 +7370,7 @@ function PaymentManagement() {
                   </td>
                 </tr>
               ))}
-              {pending.length === 0 && (
+              {filteredPending.length === 0 && (
                 <tr>
                   <td colSpan={6} className="p-20 text-center text-black/30">Nada pendente.</td>
                 </tr>
@@ -7311,8 +7380,9 @@ function PaymentManagement() {
         </div>
       ) : (
         <div className="bg-white rounded-[40px] border border-black/5 shadow-sm overflow-hidden overflow-x-auto">
-          <div className="p-6 border-b border-black/5 flex justify-between items-center min-w-[1000px]">
+          <div className="p-6 border-b border-black/5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 min-w-[1000px]">
             <h3 className="font-bold text-xl">Histórico de Recebimentos</h3>
+            <p className="text-xs text-black/40">Visualizando {filteredReceived.length} registros</p>
           </div>
           <table className="w-full text-left min-w-[1000px]">
             <thead>
@@ -7325,7 +7395,7 @@ function PaymentManagement() {
               </tr>
             </thead>
             <tbody>
-              {received.map((inst, idx) => (
+              {filteredReceived.map((inst, idx) => (
                 <tr key={idx} className="border-b border-black/5 last:border-0 hover:bg-black/[0.01] transition-all">
                   <td className="p-6">
                     <p className="font-bold text-sm">{inst.owner_name}</p>
@@ -7356,7 +7426,7 @@ function PaymentManagement() {
                   </td>
                 </tr>
               ))}
-              {received.length === 0 && (
+              {filteredReceived.length === 0 && (
                 <tr>
                   <td colSpan={5} className="p-20 text-center text-black/30">Nenhum pagamento recebido registrado.</td>
                 </tr>
