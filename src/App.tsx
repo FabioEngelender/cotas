@@ -473,7 +473,7 @@ function InviteModal({ isOpen, onClose, tenantId, userRole }: { isOpen: boolean,
   const baseUrl = window.location.origin;
   
   const links = [
-    { label: 'Convite para Cliente', url: `${baseUrl}/register-client/${tenantId}`, icon: <Users size={20} /> },
+    { label: userRole === 'client' ? 'Compartilhar Oportunidade' : 'Convite para Cliente', url: `${baseUrl}/register-client/${tenantId}`, icon: <Users size={20} /> },
     ...(userRole === 'admin' ? [{ label: 'Convite para Gerente', url: `${baseUrl}/register-manager/${tenantId}`, icon: <Shield size={20} /> }] : []),
   ];
 
