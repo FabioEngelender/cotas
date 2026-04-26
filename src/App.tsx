@@ -7240,7 +7240,12 @@ function PaymentManagement() {
     if (sortMode === 'name') {
       result.sort((a, b) => (a.owner_name || '').localeCompare(b.owner_name || ''));
     } else {
-      result.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+      result.sort((a, b) => {
+        const dateA = new Date(a.due_date).getTime();
+        const dateB = new Date(b.due_date).getTime();
+        if (dateA !== dateB) return dateA - dateB;
+        return (a.owner_name || '').localeCompare(b.owner_name || '');
+      });
     }
 
     return result;
