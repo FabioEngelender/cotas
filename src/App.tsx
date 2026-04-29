@@ -2501,12 +2501,14 @@ function Dashboard() {
           .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
         const sales_details = pQuotas.map(q => {
+          const client = dbClients.find(c => c.id === q.owner_id);
           const qInstallments = pInstallments.filter(i => i.quota_id === q.id);
           return {
             id: q.id,
             number: q.number,
             owner: q.owner_name,
             cpf: q.owner_cpf,
+            pix_key: client?.pix_key || q.owner_pix || '-',
             paid_installments: qInstallments.filter(i => i.status === 'paid').length,
             total_installments: qInstallments.length
           };
@@ -2557,7 +2559,7 @@ function Dashboard() {
       unsubInstallments();
       clearInterval(timer);
     };
-  }, [tenantId]);
+  }, [tenantId, dbClients]);
 
   useEffect(() => {
     if (!tenantId) return;
@@ -2655,8 +2657,8 @@ function Dashboard() {
     val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 });
 
   const exportProductToCSV = (productName: string, sales: any[]) => {
-    const headers = ["Cota #", "Comprador", "CPF", "Parcelas Pagas", "Total Parcelas"];
-    const rows = sales.map(s => [s.number || s.id, s.owner, s.cpf || 'Não informado', s.paid_installments, s.total_installments]);
+    const headers = ["Cota #", "Comprador", "CPF", "Chave PIX", "Parcelas Pagas", "Total Parcelas"];
+    const rows = sales.map(s => [s.number || s.id, s.owner, s.cpf || 'Não informado', s.pix_key || '-', s.paid_installments, s.total_installments]);
     const csvContent = "\uFEFF" + [headers, ...rows].map(e => e.join(";")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -2675,8 +2677,8 @@ function Dashboard() {
     (doc as any).autoTable({
       startY: 20,
       theme: 'striped',
-      head: [['Cota #', 'Comprador', 'Parcelas Pagas', 'Total']],
-      body: sales.map(s => [s.number || s.id, s.owner, s.paid_installments, s.total_installments]),
+      head: [['Cota #', 'Comprador', 'CPF', 'Chave PIX', 'Parcelas Pagas', 'Total']],
+      body: sales.map(s => [s.number || s.id, s.owner, s.cpf || 'Não informado', s.pix_key || '-', s.paid_installments, s.total_installments]),
       headStyles: { fillStyle: '#141414' }
     });
     doc.save(`vendas_${productName.toLowerCase().replace(/\s+/g, '_')}.pdf`);
@@ -2716,6 +2718,7 @@ function Dashboard() {
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Cota #</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Proprietário</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">CPF</th>
+                  <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Chave PIX</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4">Parcelas Pagas</th>
                   <th className="py-4 text-xs font-bold uppercase tracking-widest opacity-30 px-4 text-right">Progresso</th>
                 </tr>
@@ -2726,6 +2729,7 @@ function Dashboard() {
                     <td className="py-5 px-4 font-mono font-bold text-indigo-600">#{sale.number || sale.id}</td>
                     <td className="py-5 px-4 font-bold text-black/80">{sale.owner}</td>
                     <td className="py-5 px-4 text-sm text-black/50 font-medium">{sale.cpf || 'Não informado'}</td>
+                    <td className="py-5 px-4 text-sm text-black/50 font-medium">{sale.pix_key || '-'}</td>
                     <td className="py-5 px-4 font-bold text-black/70">{sale.paid_installments} / {sale.total_installments}</td>
                     <td className="py-5 px-4">
                       <div className="flex items-center justify-end gap-3">
@@ -2747,7 +2751,7 @@ function Dashboard() {
                 ))}
                 {(selectedProduct.sales_details || []).length === 0 && (
                   <tr>
-                    <td colSpan={5} className="py-20 text-center opacity-30 italic font-medium">Nenhuma cota vinculada a este produto ainda.</td>
+                    <td colSpan={6} className="py-20 text-center opacity-30 italic font-medium">Nenhuma cota vinculada a este produto ainda.</td>
                   </tr>
                 )}
               </tbody>
@@ -3932,17 +3936,21 @@ function ProductDetail() {
 
       // Table of Cotistas
       const soldQuotas = quotas.filter(q => q.status === 'sold');
-      const tableData = soldQuotas.map(q => [
-        q.number,
-        q.owner_name,
-        q.owner_cpf || 'N/A',
-        q.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
-        q.is_paid ? 'QUITADO' : 'PENDENTE'
-      ]);
+      const tableData = soldQuotas.map(q => {
+        const client = clients.find(c => c.id === q.owner_id);
+        return [
+          q.number,
+          q.owner_name,
+          q.owner_cpf || 'N/A',
+          client?.pix_key || q.owner_pix || '-',
+          q.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+          q.is_paid ? 'QUITADO' : 'PENDENTE'
+        ];
+      });
 
       (doc as any).autoTable({
         startY: cursorY,
-        head: [['Cota', 'Cotista', 'CPF', 'Valor', 'Status']],
+        head: [['Cota', 'Cotista', 'CPF', 'Chave PIX', 'Valor', 'Status']],
         body: tableData,
         theme: 'striped',
         headStyles: { fillColor: [20, 20, 20] },
@@ -4297,26 +4305,39 @@ function ProductDetail() {
     
     try {
       if (type === 'subdivide') {
+        const numFractionsStr = window.prompt(`Em quantas novas frações deseja dividir as ${selectedQuotas.length} cotas selecionadas?`, "10");
+        if (!numFractionsStr) return;
+        
+        const numFractions = parseInt(numFractionsStr);
+        if (isNaN(numFractions) || numFractions <= 0) {
+          alert("Número de frações inválido");
+          return;
+        }
+
+        const selectedQuotasData = selectedQuotas.map(qId => quotas.find(q => q.id === qId)).filter(Boolean);
+        const totalValue = selectedQuotasData.reduce((acc, q) => acc + (q?.price || 0), 0);
+        const fractionPrice = totalValue / numFractions;
+        const masterId = selectedQuotas[0];
+
+        // Create fractions
+        for (let i = 1; i <= numFractions; i++) {
+          const baseNum = selectedQuotasData[0]?.number || "0";
+          await addDoc(collection(db, 'tenants', tenantId, 'quotas'), {
+            product_id: id,
+            number: selectedQuotasData.length === 1 ? `${baseNum}.${i}` : `FR${i}-${baseNum}`,
+            price: fractionPrice,
+            status: 'available',
+            parent_id: masterId,
+            group_parents: selectedQuotas, // Armazena todos os pais para facilitar o "Desfazer"
+            createdAt: serverTimestamp()
+          });
+        }
+
+        // Mark parents as grouped
         for (const qId of selectedQuotas) {
-          const quota = quotas.find(q => q.id === qId);
-          if (!quota || quota.status !== 'available') continue;
-
-          // Create 10 fractions
-          const fractionPrice = quota.price / 10;
-          for (let i = 1; i <= 10; i++) {
-            await addDoc(collection(db, 'tenants', tenantId, 'quotas'), {
-              product_id: id,
-              number: `${quota.number}.${i}`,
-              price: fractionPrice,
-              status: 'available',
-              parent_id: qId,
-              createdAt: serverTimestamp()
-            });
-          }
-
-          // Mark parent as grouped (or subdivided)
           await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
-            status: 'grouped'
+            status: 'grouped',
+            subdivided_into: masterId
           });
         }
       } else {
@@ -4325,17 +4346,33 @@ function ProductDetail() {
           const quota = quotas.find(q => q.id === qId);
           if (!quota || quota.status !== 'grouped') continue;
 
-          // Delete children
-          const q = query(collection(db, 'tenants', tenantId, 'quotas'), where('parent_id', '==', qId));
+          const masterId = quota.subdivided_into || qId;
+          const q = query(collection(db, 'tenants', tenantId, 'quotas'), where('parent_id', '==', masterId));
           const snapshot = await getDocs(q);
-          for (const d of snapshot.docs) {
-            await deleteDoc(d.ref);
-          }
 
-          // Restore parent
-          await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
-            status: 'available'
-          });
+          if (!snapshot.empty) {
+            const firstChildData = snapshot.docs[0].data();
+            const groupParents = firstChildData.group_parents || [masterId];
+            
+            // Restaura todos os pais do grupo
+            for (const pId of groupParents) {
+              await updateDoc(doc(db, 'tenants', tenantId, 'quotas', pId), {
+                status: 'available',
+                subdivided_into: deleteField()
+              });
+            }
+
+            // Deleta as frações
+            for (const d of snapshot.docs) {
+              await deleteDoc(d.ref);
+            }
+          } else {
+            // Caso não tenha filhos, restaura apenas este
+            await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
+              status: 'available',
+              subdivided_into: deleteField()
+            });
+          }
         }
       }
       setSelectedQuotas([]);
