@@ -3536,6 +3536,10 @@ function ProductDetail() {
     const q = query(quotasRef, where('product_id', '==', id), orderBy('number', 'asc'));
     const unsubscribeQuotas = onSnapshot(q, (snapshot) => {
       const quotasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quota));
+      // Natural sort: numerical awareness (1.1, 1.2, 1.10)
+      quotasData.sort((a, b) => 
+        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
+      );
       setQuotas(quotasData);
     });
 
@@ -4324,7 +4328,7 @@ function ProductDetail() {
           const baseNum = selectedQuotasData[0]?.number || "0";
           await addDoc(collection(db, 'tenants', tenantId, 'quotas'), {
             product_id: id,
-            number: selectedQuotasData.length === 1 ? `${baseNum}.${i}` : `FR${i}-${baseNum}`,
+            number: `${baseNum}.${i}`,
             price: fractionPrice,
             status: 'available',
             parent_id: masterId,
@@ -6291,7 +6295,12 @@ function TermsPage() {
       const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
       const q = query(quotasRef, where('owner_id', '==', user.id));
       const snapshot = await getDocs(q);
-      const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
+      
+      // Natural sort
+      quotasData.sort((a, b) => 
+        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
+      );
       
       const productsRef = collection(db, 'tenants', tenantId, 'products');
       const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
@@ -6621,6 +6630,11 @@ function MyQuotas() {
         }
         return quota;
       }));
+      
+      // Natural sort: numerical awareness (1.1, 1.2, 1.10)
+      enrichedQuotas.sort((a: any, b: any) => 
+        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
+      );
       
       setQuotas(enrichedQuotas);
     }, (err) => {
