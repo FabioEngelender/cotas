@@ -4318,6 +4318,22 @@ function ProductDetail() {
           return;
         }
 
+        const customName = window.prompt("Digite o nome base para as novas frações:", "Fração");
+        if (!customName) return;
+
+        // Find the highest existing number for this custom name in existing quotas
+        let lastNumber = 0;
+        quotas.forEach(q => {
+          if (q.number && q.number.startsWith(customName)) {
+            const parts = q.number.split(' ');
+            const numPart = parts[parts.length - 1];
+            const num = parseInt(numPart);
+            if (!isNaN(num) && num > lastNumber) {
+              lastNumber = num;
+            }
+          }
+        });
+
         const selectedQuotasData = selectedQuotas.map(qId => quotas.find(q => q.id === qId)).filter(Boolean);
         const totalValue = selectedQuotasData.reduce((acc, q) => acc + (q?.price || 0), 0);
         const fractionPrice = totalValue / numFractions;
@@ -4325,14 +4341,14 @@ function ProductDetail() {
 
         // Create fractions
         for (let i = 1; i <= numFractions; i++) {
-          const baseNum = selectedQuotasData[0]?.number || "0";
+          const sequentialNum = lastNumber + i;
           await addDoc(collection(db, 'tenants', tenantId, 'quotas'), {
             product_id: id,
-            number: `${baseNum}.${i}`,
+            number: `${customName} ${String(sequentialNum).padStart(3, '0')}`,
             price: fractionPrice,
             status: 'available',
             parent_id: masterId,
-            group_parents: selectedQuotas, // Armazena todos os pais para facilitar o "Desfazer"
+            group_parents: selectedQuotas, 
             createdAt: serverTimestamp()
           });
         }
