@@ -2484,7 +2484,7 @@ function Dashboard() {
         return;
       }
 
-      const soldQuotas = quotas.filter(q => q.status === 'sold');
+      const soldQuotasStats = quotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
       const receivedPayments = installments
         .filter(i => i.status === 'paid' || i.status === 'refund')
         .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
@@ -2493,14 +2493,15 @@ function Dashboard() {
         .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
       const productRevenue = products.map((p: any) => {
-        const pQuotas = soldQuotas.filter(q => q.product_id === p.id);
+        const pQuotas = quotas.filter(q => q.product_id === p.id && q.status !== 'grouped');
+        const pSoldQuotas = pQuotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
         const pInstallments = installments.filter(i => i.product_id === p.id);
         
         const revenue = pInstallments
           .filter(i => i.status === 'paid' || i.status === 'refund')
           .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
 
-        const sales_details = pQuotas.map(q => {
+        const sales_details = pSoldQuotas.map(q => {
           const client = dbClients.find(c => c.id === q.owner_id);
           const qInstallments = pInstallments.filter(i => i.quota_id === q.id);
           return {
@@ -2518,14 +2519,14 @@ function Dashboard() {
           id: p.id,
           name: p.name, 
           revenue, 
-          total_quotas: p.total_quotas,
+          total_quotas: pQuotas.length,
           sales_details 
         };
       });
 
       setStats({
         products: products.length,
-        sales: soldQuotas.length,
+        sales: soldQuotasStats.length,
         revenue: receivedPayments,
         pendingPayments,
         receivedPayments,
@@ -2994,6 +2995,7 @@ function StatCard({ label, value, sub, onClick, color, bg = "bg-white" }: { labe
 
 function ProductsList() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [quotas, setQuotas] = useState<Quota[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [newProduct, setNewProduct] = useState<any>({ 
     name: '', 
@@ -3022,8 +3024,17 @@ function ProductsList() {
   };
 
   useEffect(() => {
-    const unsubscribe = fetchProducts();
-    return () => unsubscribe && unsubscribe();
+    if (!tenantId) return;
+    const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
+    const unsubscribeQuotas = onSnapshot(quotasRef, (snapshot) => {
+      setQuotas(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quota)));
+    });
+
+    const unsubscribeProducts = fetchProducts();
+    return () => {
+      unsubscribeProducts && unsubscribeProducts();
+      unsubscribeQuotas();
+    };
   }, [tenantId]);
 
   const [creating, setCreating] = useState(false);
@@ -3194,54 +3205,59 @@ function ProductsList() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {products.map(product => (
-          <Link key={product.id} to={`/products/${product.id}`} className="group relative">
-            <div className="bg-white rounded-3xl overflow-hidden border border-black/5 shadow-sm hover:shadow-xl transition-all duration-500">
-              <div className="h-48 bg-black/5 relative overflow-hidden">
-                {product.image_url ? (
-                  <img 
-                    src={product.image_url} 
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Package size={40} className="text-black/10" />
+        {products.map(product => {
+          const productQuotas = quotas.filter(q => q.product_id === product.id && q.status !== 'grouped');
+          const availableCount = productQuotas.filter(q => q.status === 'available').length;
+          
+          return (
+            <Link key={product.id} to={`/products/${product.id}`} className="group relative">
+              <div className="bg-white rounded-3xl overflow-hidden border border-black/5 shadow-sm hover:shadow-xl transition-all duration-500">
+                <div className="h-48 bg-black/5 relative overflow-hidden">
+                  {product.image_url ? (
+                    <img 
+                      src={product.image_url} 
+                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Package size={40} className="text-black/10" />
+                    </div>
+                  )}
+                  {availableCount === 0 && (
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
+                      <span className="px-6 py-2 bg-white text-black rounded-full font-bold text-sm tracking-widest uppercase">Esgotado</span>
+                    </div>
+                  )}
+                  <div className="absolute top-4 right-4 px-3 py-1 bg-white/90 backdrop-blur rounded-full text-[10px] font-bold uppercase tracking-widest">
+                    {availableCount} Disponíveis
                   </div>
-                )}
-                {product.available_quotas === 0 && (
-                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
-                    <span className="px-6 py-2 bg-white text-black rounded-full font-bold text-sm tracking-widest uppercase">Esgotado</span>
-                  </div>
-                )}
-                <div className="absolute top-4 right-4 px-3 py-1 bg-white/90 backdrop-blur rounded-full text-[10px] font-bold uppercase tracking-widest">
-                  {product.available_quotas} Disponíveis
+                  {user?.role === 'admin' && (
+                    <button 
+                      onClick={(e) => deleteProduct(e, product.id)}
+                      className="absolute top-4 left-4 p-2 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
-                {user?.role === 'admin' && (
-                  <button 
-                    onClick={(e) => deleteProduct(e, product.id)}
-                    className="absolute top-4 left-4 p-2 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                )}
-              </div>
-              <div className="p-6">
-                <h3 className="font-bold text-xl mb-2">{product.name}</h3>
-                <p className="text-sm text-black/50 line-clamp-6 mb-4">{product.description}</p>
-                <div className="flex items-center justify-between pt-4 border-t border-black/5">
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Valor da Cota</p>
-                    <p className="font-bold text-lg">
-                      {product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                    </p>
+                <div className="p-6">
+                  <h3 className="font-bold text-xl mb-2">{product.name}</h3>
+                  <p className="text-sm text-black/50 line-clamp-6 mb-4">{product.description}</p>
+                  <div className="flex items-center justify-between pt-4 border-t border-black/5">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">Valor da Cota</p>
+                      <p className="font-bold text-lg">
+                        {product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </p>
+                    </div>
+                    <ChevronRight size={20} className="text-black/20 group-hover:text-black group-hover:translate-x-1 transition-all" />
                   </div>
-                  <ChevronRight size={20} className="text-black/20 group-hover:text-black group-hover:translate-x-1 transition-all" />
                 </div>
               </div>
-            </div>
-          </Link>
-        ))}
+            </Link>
+          );
+        })}
       </div>
 
       {/* Create Product Modal Placeholder */}
@@ -5416,22 +5432,25 @@ function ProductDetail() {
             <div className="space-y-4">
               <div className="flex justify-between">
                 <span className="opacity-60">Total de Cotas</span>
-                <span className="font-bold">{product.total_quotas}</span>
+                <span className="font-bold">{quotas.filter(q => q.status !== 'grouped').length}</span>
               </div>
               <div className="flex justify-between">
                 <span className="opacity-60">Disponíveis</span>
-                <span className="font-bold text-emerald-400">{product.available_quotas}</span>
+                <span className="font-bold text-emerald-400">{quotas.filter(q => q.status === 'available').length}</span>
               </div>
               <div className="flex justify-between">
                 <span className="opacity-60">Vendidas</span>
-                <span className="font-bold text-red-400">{product.sold_quotas}</span>
+                <span className="font-bold text-red-400">{quotas.filter(q => q.status === 'sold' || q.status === 'defaulted').length}</span>
               </div>
               <div className="pt-4 border-t border-white/10">
                 <p className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-1">Progresso de Venda</p>
                 <div className="h-2 bg-white/10 rounded-full overflow-hidden">
                   <div 
                     className="h-full bg-emerald-500" 
-                    style={{ width: `${(product.sold_quotas / product.total_quotas) * 100}%` }}
+                    style={{ 
+                      width: `${(quotas.filter(q => q.status === 'sold' || q.status === 'defaulted').length / 
+                        (quotas.filter(q => q.status !== 'grouped').length || 1)) * 100}%` 
+                    }}
                   />
                 </div>
               </div>
