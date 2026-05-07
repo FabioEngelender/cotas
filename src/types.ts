@@ -58,6 +58,8 @@ export interface Quota {
   status: 'available' | 'sold' | 'grouped' | 'defaulted';
   price: number;
   parent_quota_id?: string;
+  parent_id?: string;
+  subdivided_into?: string;
   sold_at?: string;
   is_paid?: boolean;
 }

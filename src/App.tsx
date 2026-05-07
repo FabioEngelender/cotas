@@ -3536,10 +3536,13 @@ function ProductDetail() {
     const q = query(quotasRef, where('product_id', '==', id), orderBy('number', 'asc'));
     const unsubscribeQuotas = onSnapshot(q, (snapshot) => {
       const quotasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quota));
-      // Natural sort: numerical awareness (1.1, 1.2, 1.10)
-      quotasData.sort((a, b) => 
-        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
-      );
+      // Prioritize integers (no parent_id) before fractions, then natural sort
+      quotasData.sort((a, b) => {
+        const isFractionA = !!a.parent_id;
+        const isFractionB = !!b.parent_id;
+        if (isFractionA !== isFractionB) return isFractionA ? 1 : -1;
+        return (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
       setQuotas(quotasData);
     });
 
@@ -6313,10 +6316,13 @@ function TermsPage() {
       const snapshot = await getDocs(q);
       const quotasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
       
-      // Natural sort
-      quotasData.sort((a, b) => 
-        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
-      );
+      // Prioritize integers before fractions, then natural sort
+      quotasData.sort((a, b) => {
+        const isFractionA = !!a.parent_id;
+        const isFractionB = !!b.parent_id;
+        if (isFractionA !== isFractionB) return isFractionA ? 1 : -1;
+        return (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
       
       const productsRef = collection(db, 'tenants', tenantId, 'products');
       const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
@@ -6647,10 +6653,13 @@ function MyQuotas() {
         return quota;
       }));
       
-      // Natural sort: numerical awareness (1.1, 1.2, 1.10)
-      enrichedQuotas.sort((a: any, b: any) => 
-        (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' })
-      );
+      // Prioritize integers before fractions, then natural sort
+      enrichedQuotas.sort((a: any, b: any) => {
+        const isFractionA = !!a.parent_id;
+        const isFractionB = !!b.parent_id;
+        if (isFractionA !== isFractionB) return isFractionA ? 1 : -1;
+        return (String(a.number) || '').localeCompare(String(b.number) || '', undefined, { numeric: true, sensitivity: 'base' });
+      });
       
       setQuotas(enrichedQuotas);
     }, (err) => {
