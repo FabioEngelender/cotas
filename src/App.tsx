@@ -94,13 +94,11 @@ import { auth, db, storage, handleFirestoreError, OperationType } from './fireba
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment, deleteField, runTransaction } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { financialService } from './services/financialService.js';
 
-const toCents = (val: number) => Math.round(val * 100);
-const fromCents = (cents: number) => cents / 100;
-const exactSum = (arr: number[]) => {
-  const sumCents = arr.reduce((acc, val) => acc + toCents(val), 0);
-  return fromCents(sumCents);
-};
+const toCents = financialService.toCents;
+const fromCents = financialService.fromCents;
+const exactSum = financialService.exactSum;
 
 const validateCPF = (cpf: string): boolean => {
   const cleanCPF = cpf.replace(/\D/g, '');
@@ -146,6 +144,36 @@ const computeHash = async (text: string): Promise<string> => {
     return 'fallback_' + Math.abs(hash).toString(16);
   }
 };
+
+const appendAuditLog = async (
+  tenantId: string,
+  userId: string,
+  userName: string,
+  action: string,
+  entityType: string,
+  entityId: string,
+  details: string,
+  oldValues?: any,
+  newValues?: any
+) => {
+  try {
+    const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+    await setDoc(auditRef, {
+      user_id: userId || 'Sistema',
+      user_name: userName || 'Sistema',
+      action,
+      entity_type: entityType,
+      entity_id: entityId,
+      details,
+      old_values: oldValues || null,
+      new_values: newValues || null,
+      created_at: serverTimestamp()
+    });
+  } catch (err) {
+    console.error("Failed to append audit log:", err);
+  }
+};
+
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -2612,66 +2640,8 @@ function Dashboard() {
     let installments: any[] = [];
 
     const updateStats = () => {
-      if (products.length === 0) {
-        setStats({
-          products: 0,
-          sales: 0,
-          revenue: 0,
-          pendingPayments: 0,
-          receivedPayments: 0,
-          productRevenue: []
-        });
-        return;
-      }
-
-      const soldQuotasStats = quotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
-      const receivedPayments = exactSum(installments
-        .filter(i => i.status === 'paid' || i.status === 'refund')
-        .map(i => Number(i.amount) || 0));
-      const pendingPayments = exactSum(installments
-        .filter(i => i.status === 'pending')
-        .map(i => Number(i.amount) || 0));
-
-      const productRevenue = products.map((p: any) => {
-        const pQuotas = quotas.filter(q => q.product_id === p.id && q.status !== 'grouped');
-        const pSoldQuotas = pQuotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
-        const pInstallments = installments.filter(i => i.product_id === p.id);
-        
-        const revenue = exactSum(pInstallments
-          .filter(i => i.status === 'paid' || i.status === 'refund')
-          .map(i => Number(i.amount) || 0));
-
-        const sales_details = pSoldQuotas.map(q => {
-          const client = dbClients.find(c => c.id === q.owner_id);
-          const qInstallments = pInstallments.filter(i => i.quota_id === q.id);
-          return {
-            id: q.id,
-            number: q.number,
-            owner: q.owner_name,
-            cpf: q.owner_cpf,
-            pix_key: client?.pix_key || q.owner_pix || '-',
-            paid_installments: qInstallments.filter(i => i.status === 'paid').length,
-            total_installments: qInstallments.length
-          };
-        });
-
-        return { 
-          id: p.id,
-          name: p.name, 
-          revenue, 
-          total_quotas: pQuotas.length,
-          sales_details 
-        };
-      });
-
-      setStats({
-        products: products.length,
-        sales: soldQuotasStats.length,
-        revenue: receivedPayments,
-        pendingPayments,
-        receivedPayments,
-        productRevenue
-      });
+      const statsObj = financialService.calculateDashboardStats(products, quotas, installments, dbClients);
+      setStats(statsObj);
     };
 
     const unsubProducts = onSnapshot(productsRef, (snapshot) => {
@@ -2721,26 +2691,15 @@ function Dashboard() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const rawItems = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as any));
       
-      let filtered = rawItems.filter(item => {
-        if (filterProduct !== 'all' && item.product_id !== filterProduct) return false;
-        if (filterClient !== 'all' && item.owner_id !== filterClient) return false;
-        if (startDate && item.paid_at && item.paid_at < startDate) return false;
-        if (endDate && item.paid_at && item.paid_at > endDate + 'T23:59:59') return false;
-        return true;
-      });
-
-      filtered.sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
-
-      const collected = filtered.filter(i => i.status === 'paid').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-      const refunded = filtered.filter(i => i.status === 'refund').reduce((acc, i) => acc + Math.abs(Number(i.amount) || 0), 0);
-      const retained = filtered.filter(i => i.status === 'retention').reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+      const report = financialService.calculateConsolidatedReport(rawItems, filterProduct, filterClient, startDate, endDate);
+      report.items.sort((a, b) => (b.paid_at || '').localeCompare(a.paid_at || ''));
       
       setFinanceData({
-        collected,
-        refunded,
-        retained,
-        net: collected - refunded,
-        items: filtered
+        collected: report.collected,
+        refunded: report.refunded,
+        retained: report.retained,
+        net: report.net,
+        items: report.items
       });
       setFinanceLoading(false);
     });
@@ -3773,6 +3732,38 @@ function ProductDetail() {
     const q = query(quotasRef, where('product_id', '==', id), orderBy('number', 'asc'));
     const unsubscribeQuotas = onSnapshot(q, (snapshot) => {
       const quotasData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quota));
+      
+      // Auto-release expired reservations (older than 10 mins)
+      const nowMs = Date.now();
+      quotasData.forEach(async (quota) => {
+        if (quota.status === 'reserved' && quota.reserved_at) {
+          const reservedTime = new Date(quota.reserved_at).getTime();
+          if (nowMs - reservedTime > 10 * 60 * 1000) {
+            try {
+              const eqRef = doc(db, 'tenants', tenantId, 'quotas', quota.id);
+              await updateDoc(eqRef, {
+                status: 'available',
+                reserved_by: deleteField(),
+                reserved_at: deleteField()
+              });
+              await appendAuditLog(
+                tenantId,
+                'Sistema',
+                'Sistema',
+                'LIBERACAO_RESERVA_EXPIRADA',
+                'Quota',
+                quota.id,
+                `Reserva expirada para a cota #${quota.number} (timeout de 10 min)`,
+                { status: 'reserved', reserved_at: quota.reserved_at },
+                { status: 'available' }
+              );
+            } catch (err) {
+              console.error("Failed to release expired quota reservation:", err);
+            }
+          }
+        }
+      });
+
       // Prioritize integers (no parent_id) before fractions, then natural sort
       quotasData.sort((a, b) => {
         const isFractionA = !!a.parent_id;
@@ -3975,8 +3966,7 @@ function ProductDetail() {
       
       const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
       const retentionPercent = product.retention_percent || 0;
-      const retentionValue = totalPaid * (retentionPercent / 100);
-      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
+      const { retentionValue, suggestedRefund } = financialService.estimateCancellation(totalPaid, retentionPercent);
 
       setCancellationData({
         quotaId,
@@ -4285,8 +4275,7 @@ function ProductDetail() {
       
       const totalPaid = snapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0);
       const retentionPercent = product.retention_percent || 0;
-      const retentionValue = totalPaid * (retentionPercent / 100);
-      const suggestedRefund = Math.max(0, totalPaid - retentionValue);
+      const { retentionValue, suggestedRefund } = financialService.estimateCancellation(totalPaid, retentionPercent);
 
       setCancellationData({
         quotaId,
@@ -4388,6 +4377,53 @@ function ProductDetail() {
       alert('Este produto não pode mais ser adquirido ou parcelado pois a data final está muito próxima ou já expirou.');
       return;
     }
+
+    // Reservation with runTransaction
+    try {
+      await runTransaction(db, async (trans) => {
+        const quotaSnaps = [];
+        for (const qId of selectedQuotas) {
+          const qRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+          const snap = await trans.get(qRef);
+          if (!snap.exists()) {
+            throw new Error(`A cota de ID ${qId} não existe.`);
+          }
+          const quotaData = snap.data();
+          if (quotaData.status !== 'available') {
+            throw new Error(`A cota #${quotaData.number || qId} já não está mais disponível.`);
+          }
+          quotaSnaps.push({ ref: qRef, data: quotaData });
+        }
+
+        const nowIso = new Date().toISOString();
+        for (const qs of quotaSnaps) {
+          trans.update(qs.ref, {
+            status: 'reserved',
+            reserved_by: user?.id || 'client',
+            reserved_at: nowIso
+          });
+        }
+      });
+      
+      selectedQuotas.forEach(async (qId) => {
+        const qObj = quotas.find(q => q.id === qId);
+        await appendAuditLog(
+          tenantId,
+          user?.id || 'client',
+          user?.name || 'Cliente',
+          'RESERVA_COTA_INICIADA',
+          'Quota',
+          qId,
+          `Reserva temporária de 10 min da cota #${qObj?.number || qId} para aquisição.`
+        );
+      });
+
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Erro ao realizar a reserva temporária da cota.');
+      return;
+    }
+
     setAgreedToTerms(false);
     if (product?.payment_type === 'cash') {
       setInstallmentCount(1);
@@ -4395,6 +4431,37 @@ function ProductDetail() {
       setInstallmentCount(count);
     }
     setShowBuyModal(true);
+  };
+
+  const handleCancelBuy = async () => {
+    setShowBuyModal(false);
+    if (!tenantId || selectedQuotas.length === 0) return;
+    try {
+      const batch = writeBatch(db);
+      for (const qId of selectedQuotas) {
+        batch.update(doc(db, 'tenants', tenantId, 'quotas', qId), {
+          status: 'available',
+          reserved_by: deleteField(),
+          reserved_at: deleteField()
+        });
+      }
+      await batch.commit();
+      
+      selectedQuotas.forEach(async (qId) => {
+        const qObj = quotas.find(q => q.id === qId);
+        await appendAuditLog(
+          tenantId,
+          user?.id || 'client',
+          user?.name || 'Cliente',
+          'RESERVA_CANCELADA_VOLUNTARIA',
+          'Quota',
+          qId,
+          `O usuário cancelou o checkout e liberou a cota #${qObj?.number || qId} de volta para disponível.`
+        );
+      });
+    } catch (err) {
+      console.error("Erro ao liberar cota reservada:", err);
+    }
   };
 
   const confirmPurchase = async () => {
@@ -4418,7 +4485,7 @@ function ProductDetail() {
 
         for (const qId of currentBatchQuotas) {
           const quota = quotas.find(q => q.id === qId);
-          if (!quota || quota.status !== 'available') continue;
+          if (!quota || (quota.status !== 'available' && quota.status !== 'reserved')) continue;
 
           // Update quota
           const quotaRef = doc(db, 'tenants', tenantId, 'quotas', qId);
@@ -4429,8 +4496,23 @@ function ProductDetail() {
             product_name: product.name,
             status: 'sold',
             is_paid: false,
-            sold_at: now.toISOString()
+            sold_at: now.toISOString(),
+            reserved_by: deleteField(),
+            reserved_at: deleteField()
           });
+
+          // Check fraction parent status update
+          if (quota.parent_id) {
+            const siblings = quotas.filter(q => q.parent_id === quota.parent_id && q.id !== quota.id);
+            const allSiblingsSold = siblings.every(s => s.status === 'sold' || currentBatchQuotas.includes(s.id));
+            if (allSiblingsSold) {
+              const baseQuotaRef = doc(db, 'tenants', tenantId, 'quotas', quota.parent_id);
+              batch.update(baseQuotaRef, {
+                status: 'sold',
+                sold_at: now.toISOString()
+              });
+            }
+          }
 
           // Ownership History Entry (New)
           const historyEntryRef = doc(collection(db, 'tenants', tenantId, 'quotas', qId, 'ownership_history'));
@@ -5225,7 +5307,7 @@ function ProductDetail() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  onClick={() => setShowBuyModal(false)}
+                  onClick={handleCancelBuy}
                   className="absolute inset-0 bg-black/40 backdrop-blur-sm"
                 />
                  <motion.div 
@@ -5376,6 +5458,15 @@ function ProductDetail() {
                             </>
                           ) : 'Finalizar Compra'}
                         </button>
+                        {!isPurchasing && (
+                          <button 
+                            type="button"
+                            onClick={handleCancelBuy}
+                            className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all flex items-center justify-center gap-2 mt-2"
+                          >
+                            Cancelar e Voltar
+                          </button>
+                        )}
                       </div>
                     </>
                   )}
