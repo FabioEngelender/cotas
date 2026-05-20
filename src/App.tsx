@@ -38,7 +38,8 @@ import {
   Info,
   History,
   Search,
-  TrendingUp
+  TrendingUp,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -91,8 +92,60 @@ const maskCNPJ = (value: string) => {
 
 import { auth, db, storage, handleFirestoreError, OperationType } from './firebase.js';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, updatePassword, updateProfile, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment, deleteField } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, collection, query, where, setDoc, serverTimestamp, addDoc, deleteDoc, updateDoc, getDocs, orderBy, limit, writeBatch, increment, deleteField, runTransaction } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+const toCents = (val: number) => Math.round(val * 100);
+const fromCents = (cents: number) => cents / 100;
+const exactSum = (arr: number[]) => {
+  const sumCents = arr.reduce((acc, val) => acc + toCents(val), 0);
+  return fromCents(sumCents);
+};
+
+const validateCPF = (cpf: string): boolean => {
+  const cleanCPF = cpf.replace(/\D/g, '');
+  if (cleanCPF.length !== 11) return false;
+  if (/^(\d)\1{10}$/.test(cleanCPF)) return false;
+  
+  let sum = 0;
+  let remainder;
+  
+  for (let i = 1; i <= 9; i++) {
+    sum = sum + parseInt(cleanCPF.substring(i - 1, i)) * (11 - i);
+  }
+  
+  remainder = (sum * 10) % 11;
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cleanCPF.substring(9, 10))) return false;
+  
+  sum = 0;
+  for (let i = 1; i <= 10; i++) {
+    sum = sum + parseInt(cleanCPF.substring(i - 1, i)) * (12 - i);
+  }
+  
+  remainder = (sum * 10) % 11;
+  if (remainder === 10 || remainder === 11) remainder = 0;
+  if (remainder !== parseInt(cleanCPF.substring(10, 11))) return false;
+  
+  return true;
+};
+
+const computeHash = async (text: string): Promise<string> => {
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  } catch (err) {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      hash = (hash << 5) - hash + text.charCodeAt(i);
+      hash |= 0;
+    }
+    return 'fallback_' + Math.abs(hash).toString(16);
+  }
+};
 import { testConnection } from './firebaseService.js';
 
 // --- Error Boundary ---
@@ -560,7 +613,21 @@ function AuthenticatedApp({ settings }: { settings: any }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
   const location = useLocation();
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -584,9 +651,22 @@ function AuthenticatedApp({ settings }: { settings: any }) {
         userRole={user.role}
       />
       
+      {!isOnline && (
+        <div className="bg-red-600 text-white text-xs px-4 py-3 flex items-center justify-center gap-2 font-mono font-bold w-full text-center fixed bottom-0 left-0 right-0 z-[100] border-t border-red-700 shadow-2xl">
+          <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping" />
+          Módulo Offline ativado - Conexão suspensa. Operações de pagamento e reserva estão pausadas.
+        </div>
+      )}
+
       {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-white border-b border-black/5 flex items-center justify-between px-6 z-[60]">
-        <span className="font-bold text-lg tracking-tight">{settings.app_name}</span>
+        <div className="flex flex-col">
+          <span className="font-bold text-lg tracking-tight leading-none">{settings.app_name}</span>
+          <span className="flex items-center gap-1.5 text-[8px] font-mono font-bold mt-1">
+            <span className={cn("w-1.5 h-1.5 rounded-full", isOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500")} />
+            {isOnline ? "CONECTADO" : "OFFLINE"}
+          </span>
+        </div>
         <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} className="p-2 hover:bg-black/5 rounded-xl">
           {isMobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
         </button>
@@ -619,7 +699,17 @@ function AuthenticatedApp({ settings }: { settings: any }) {
         )}
       >
         <div className="p-6 flex items-center justify-between border-b border-[#141414]/5">
-          {showLabels && <span className="font-bold text-xl tracking-tight">{settings.app_name}</span>}
+          {showLabels ? (
+            <div className="flex flex-col">
+              <span className="font-bold text-xl tracking-tight leading-none">{settings.app_name}</span>
+              <span className="flex items-center gap-1.5 text-[8px] font-mono font-bold mt-1 p-0.5 bg-black/5 rounded px-1.5 w-fit">
+                <span className={cn("w-1.5 h-1.5 rounded-full", isOnline ? "bg-emerald-500 animate-pulse" : "bg-red-500")} />
+                {isOnline ? "OPERANDO ONLINE" : "MODO OFFLINE"}
+              </span>
+            </div>
+          ) : (
+            <span className={cn("w-2 h-2 rounded-full mx-auto", isOnline ? "bg-emerald-500" : "bg-red-500")} />
+          )}
           <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="hidden lg:block p-1 hover:bg-black/5 rounded">
             {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -1250,14 +1340,39 @@ function RegisterClient() {
       setError('Por favor, preencha nome, e-mail e senha.');
       return;
     }
+
+    if (formData.cpf) {
+      if (!validateCPF(formData.cpf)) {
+        setError('O CPF informado é inválido. Certifique-se de preencher corretamente.');
+        return;
+      }
+    }
+
     setError('');
     setLoading(true);
 
     try {
       let firebaseUser;
       
-      // Check if email is already in this tenant's users
       const tenantUsersRef = collection(db, 'tenants', inviteTenantId, 'users');
+
+      // Check for CPF uniqueness inside this tenant
+      if (formData.cpf) {
+        const cleanCPF = formData.cpf.replace(/\D/g, '');
+        const formattedCPF = maskCPF(cleanCPF);
+        const cpfQuery = query(tenantUsersRef, where('cpf', '==', formattedCPF));
+        const cpfSnap = await getDocs(cpfQuery);
+        if (!cpfSnap.empty) {
+          const matchedUser = cpfSnap.docs[0].data();
+          if (matchedUser.email.toLowerCase() !== formData.email.toLowerCase()) {
+            setError(`O documento de CPF informado já está associado a outro usuário cadastradonesta loja.`);
+            setLoading(false);
+            return;
+          }
+        }
+      }
+      
+      // Check if email is already in this tenant's users
       const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
       const emailSnap = await getDocs(emailQuery);
       
@@ -1874,14 +1989,39 @@ function Register() {
       setError('Por favor, preencha nome, e-mail e senha.');
       return;
     }
+
+    if (formData.cpf) {
+      if (!validateCPF(formData.cpf)) {
+        setError('O CPF informado é inválido. Certifique-se de preencher corretamente.');
+        return;
+      }
+    }
+
     setError('');
     setLoading(true);
 
     try {
       let firebaseUser;
       
-      // Check if email is already in this tenant's users
       const tenantUsersRef = collection(db, 'tenants', tenantId, 'users');
+
+      // Check for CPF uniqueness inside this tenant
+      if (formData.cpf) {
+        const cleanCPF = formData.cpf.replace(/\D/g, '');
+        const formattedCPF = maskCPF(cleanCPF);
+        const cpfQuery = query(tenantUsersRef, where('cpf', '==', formattedCPF));
+        const cpfSnap = await getDocs(cpfQuery);
+        if (!cpfSnap.empty) {
+          const matchedUser = cpfSnap.docs[0].data();
+          if (matchedUser.email.toLowerCase() !== formData.email.toLowerCase()) {
+            setError(`O documento de CPF informado já está associado a outro usuário cadastradonesta loja.`);
+            setLoading(false);
+            return;
+          }
+        }
+      }
+      
+      // Check if email is already in this tenant's users
       const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
       const emailSnap = await getDocs(emailQuery);
       
@@ -2485,21 +2625,21 @@ function Dashboard() {
       }
 
       const soldQuotasStats = quotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
-      const receivedPayments = installments
+      const receivedPayments = exactSum(installments
         .filter(i => i.status === 'paid' || i.status === 'refund')
-        .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
-      const pendingPayments = installments
+        .map(i => Number(i.amount) || 0));
+      const pendingPayments = exactSum(installments
         .filter(i => i.status === 'pending')
-        .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+        .map(i => Number(i.amount) || 0));
 
       const productRevenue = products.map((p: any) => {
         const pQuotas = quotas.filter(q => q.product_id === p.id && q.status !== 'grouped');
         const pSoldQuotas = pQuotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
         const pInstallments = installments.filter(i => i.product_id === p.id);
         
-        const revenue = pInstallments
+        const revenue = exactSum(pInstallments
           .filter(i => i.status === 'paid' || i.status === 'refund')
-          .reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+          .map(i => Number(i.amount) || 0));
 
         const sales_details = pSoldQuotas.map(q => {
           const client = dbClients.find(c => c.id === q.owner_id);
@@ -3040,7 +3180,7 @@ function ProductsList() {
   const [creating, setCreating] = useState(false);
   const [creationProgress, setCreationProgress] = useState(0);
 
-  const handleCreateProduct = async () => {
+  const handleCreateProduct = async (status: 'draft' | 'active' = 'active') => {
     if (!newProduct.name || !newProduct.total_quotas || !newProduct.quota_price || !newProduct.expiration_month || !tenantId) {
       alert('Por favor, preencha todos os campos obrigatórios.');
       return;
@@ -3087,7 +3227,8 @@ function ProductsList() {
         quota_price: Number(newProduct.quota_price),
         created_at: new Date().toISOString(),
         sold_quotas: 0,
-        available_quotas: totalQuotas
+        available_quotas: totalQuotas,
+        status: status
       };
 
       const productRef = await addDoc(collection(db, 'tenants', tenantId, 'products'), productData);
@@ -3098,33 +3239,35 @@ function ProductsList() {
         user_id: user?.id || 'Sistema',
         user_name: user?.name || 'Sistema',
         action: 'CRIAR_PRODUTO',
-        details: `Criou o produto ${newProduct.name} com ${newProduct.total_quotas} cotas`,
+        details: `Criou o produto ${newProduct.name} com ${newProduct.total_quotas} cotas como ${status === 'draft' ? 'Rascunho' : 'Ativo'}`,
         created_at: serverTimestamp()
       });
 
-      // Create quotas in batches of 500
-      const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
-      const batchSize = 500;
-      const numBatches = Math.ceil(totalQuotas / batchSize);
+      if (status === 'active') {
+        // Create quotas in batches of 500
+        const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
+        const batchSize = 500;
+        const numBatches = Math.ceil(totalQuotas / batchSize);
 
-      for (let b = 0; b < numBatches; b++) {
-        const batch = writeBatch(db);
-        const start = b * batchSize + 1;
-        const end = Math.min((b + 1) * batchSize, totalQuotas);
+        for (let b = 0; b < numBatches; b++) {
+          const batch = writeBatch(db);
+          const start = b * batchSize + 1;
+          const end = Math.min((b + 1) * batchSize, totalQuotas);
 
-        for (let i = start; i <= end; i++) {
-          const quotaRef = doc(quotasRef);
-          batch.set(quotaRef, {
-            product_id: productRef.id,
-            number: i.toString().padStart(4, '0'),
-            status: 'available',
-            price: productData.quota_price,
-            created_at: new Date().toISOString()
-          });
+          for (let i = start; i <= end; i++) {
+            const quotaRef = doc(quotasRef);
+            batch.set(quotaRef, {
+              product_id: productRef.id,
+              number: i.toString().padStart(4, '0'),
+              status: 'available',
+              price: productData.quota_price,
+              created_at: new Date().toISOString()
+            });
+          }
+          
+          await batch.commit();
+          setCreationProgress(Math.round((end / totalQuotas) * 100));
         }
-        
-        await batch.commit();
-        setCreationProgress(Math.round((end / totalQuotas) * 100));
       }
 
       setShowCreate(false);
@@ -3419,18 +3562,27 @@ function ProductsList() {
                   </label>
                 </div>
 
-                <button 
-                  onClick={handleCreateProduct}
-                  disabled={creating}
-                  className="w-full py-4 bg-black text-white rounded-2xl font-bold mt-4 disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {creating ? (
-                    <>
-                      <RefreshCw size={20} className="animate-spin" />
-                      Criando Cotas... {creationProgress}%
-                    </>
-                  ) : 'Criar Produto'}
-                </button>
+                <div className="flex flex-col sm:flex-row gap-3 mt-4">
+                  <button 
+                    onClick={() => handleCreateProduct('draft')}
+                    disabled={creating}
+                    className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold disabled:opacity-50 text-sm"
+                  >
+                    Salvar Rascunho
+                  </button>
+                  <button 
+                    onClick={() => handleCreateProduct('active')}
+                    disabled={creating}
+                    className="w-full sm:flex-[2] py-4 bg-black text-white rounded-2xl font-bold disabled:opacity-50 flex items-center justify-center gap-2 text-sm"
+                  >
+                    {creating ? (
+                      <>
+                        <RefreshCw size={20} className="animate-spin" />
+                        Criando Cotas... {creationProgress}%
+                      </>
+                    ) : 'Criar e Publicar'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -3450,6 +3602,7 @@ function ProductDetail() {
   const [installmentCount, setInstallmentCount] = useState(1);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [termContent, setTermContent] = useState('');
+  const [activeTermObj, setActiveTermObj] = useState<any>(null);
   const [managers, setManagers] = useState<User[]>([]);
   const { user, tenantId, setUser } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
@@ -3567,9 +3720,12 @@ function ProductDetail() {
     const termsQuery = query(termsRef, where('is_active', '==', true), limit(1));
     const unsubscribeTerms = onSnapshot(termsQuery, (snapshot) => {
       if (!snapshot.empty) {
-        setTermContent(snapshot.docs[0].data().content);
+        const docData = snapshot.docs[0].data();
+        setTermContent(docData.content);
+        setActiveTermObj({ id: snapshot.docs[0].id, ...docData });
       } else {
         setTermContent('Termos padrão do sistema...');
+        setActiveTermObj(null);
       }
     });
 
@@ -3588,6 +3744,75 @@ function ProductDetail() {
     };
   }, [id, tenantId]);
 
+  const [publishingDraft, setPublishingDraft] = useState(false);
+  const [publishProgress, setPublishProgress] = useState(0);
+
+  const handlePublishDraft = async () => {
+    if (!product || !tenantId) return;
+    if (product.status !== 'draft') return;
+    
+    if (!confirm('Deseja realmente publicar este rascunho? Uma vez ativo, as cotas serão geradas de forma definitiva na base e as variáveis constitutivas (preço, quantidade) serão bloqueadas para edição.')) {
+      return;
+    }
+
+    setPublishingDraft(true);
+    setPublishProgress(0);
+
+    try {
+      const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+      const totalQuotas = Number(product.total_quotas);
+      const quotaPrice = Number(product.quota_price);
+
+      // 1. Create quotas in database in batches
+      const quotasRef = collection(db, 'tenants', tenantId, 'quotas');
+      const batchSize = 500;
+      const numBatches = Math.ceil(totalQuotas / batchSize);
+
+      for (let b = 0; b < numBatches; b++) {
+        const batch = writeBatch(db);
+        const start = b * batchSize + 1;
+        const end = Math.min((b + 1) * batchSize, totalQuotas);
+
+        for (let i = start; i <= end; i++) {
+          const quotaRef = doc(quotasRef);
+          batch.set(quotaRef, {
+            product_id: product.id,
+            number: i.toString().padStart(4, '0'),
+            status: 'available',
+            price: quotaPrice,
+            created_at: new Date().toISOString()
+          });
+        }
+        
+        await batch.commit();
+        setPublishProgress(Math.round((end / totalQuotas) * 100));
+      }
+
+      // 2. Set product status as active
+      await updateDoc(productRef, {
+        status: 'active'
+      });
+
+      // Audit Log
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'PUBLICAR_PRODUTO',
+        details: `Publicou o rascunho de produto ${product.name} ativando ${totalQuotas} cotas`,
+        created_at: serverTimestamp()
+      });
+
+      alert('Produto publicado com sucesso! Suas cotas estão agora prontas e disponíveis para aquisição.');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao publicar rascunho.');
+    } finally {
+      setPublishingDraft(false);
+      setPublishProgress(0);
+    }
+  };
+
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [showCancellationModal, setShowCancellationModal] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
@@ -3597,6 +3822,63 @@ function ProductDetail() {
   const [isProcessingCancellation, setIsProcessingCancellation] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [isClosingProduct, setIsClosingProduct] = useState(false);
+  const [forceCloseChecked, setForceCloseChecked] = useState(false);
+  const [closeMetrics, setCloseMetrics] = useState<{
+    pendingInstallmentsCount: number;
+    pendingAmount: number;
+    availableQuotasCount: number;
+    soldQuotasCount: number;
+    unpaidQuotasCount: number;
+    delinquents: string[];
+    loading: boolean;
+  }>({
+    pendingInstallmentsCount: 0,
+    pendingAmount: 0,
+    availableQuotasCount: 0,
+    soldQuotasCount: 0,
+    unpaidQuotasCount: 0,
+    delinquents: [],
+    loading: false
+  });
+
+  useEffect(() => {
+    if (!showCloseModal || !id || !tenantId) return;
+    
+    setCloseMetrics(prev => ({ ...prev, loading: true }));
+    const fetchCloseMetrics = async () => {
+      try {
+        const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
+        const qInst = query(installmentsRef, where('product_id', '==', id));
+        const instSnap = await getDocs(qInst);
+        
+        const allInsts = instSnap.docs.map(d => d.data());
+        const pendingInsts = allInsts.filter(i => i.status === 'pending');
+        const pendingSum = pendingInsts.reduce((acc, i) => acc + (Number(i.amount) || 0), 0);
+        
+        const availQ = quotas.filter(q => q.status === 'available');
+        const soldQ = quotas.filter(q => q.status === 'sold' || q.status === 'defaulted');
+        const unpaidQ = soldQ.filter(q => !q.is_paid);
+
+        const uniqueDelinquents = Array.from(new Set(pendingInsts.map(i => i.owner_name))).filter(Boolean) as string[];
+
+        setCloseMetrics({
+          pendingInstallmentsCount: pendingInsts.length,
+          pendingAmount: pendingSum,
+          availableQuotasCount: availQ.length,
+          soldQuotasCount: soldQ.length,
+          unpaidQuotasCount: unpaidQ.length,
+          delinquents: uniqueDelinquents,
+          loading: false
+        });
+      } catch (err) {
+        console.error(err);
+        setCloseMetrics(prev => ({ ...prev, loading: false }));
+      }
+    };
+
+    fetchCloseMetrics();
+  }, [showCloseModal, id, tenantId, quotas]);
+
   const [showQuotaMenu, setShowQuotaMenu] = useState<string | null>(null);
   const [showHistoryModal, setShowHistoryModal] = useState<string | null>(null);
   const [quotaHistory, setQuotaHistory] = useState<OwnershipHistory[]>([]);
@@ -3772,6 +4054,19 @@ function ProductDetail() {
 
   const handleCloseProduct = async () => {
     if (!tenantId || !product) return;
+
+    const hasPendencies = closeMetrics.pendingInstallmentsCount > 0 || closeMetrics.availableQuotasCount > 0;
+    if (hasPendencies) {
+      if (user?.role !== 'admin') {
+        alert('Erro de Permissão: Apenas o Administrador Master pode forçar o fechamento do produto possuindo pendências de cotas ou financeiras.');
+        return;
+      }
+      if (!forceCloseChecked) {
+        alert('Confirmação pendente: Para forçar o fechamento, você precisa marcar a caixa atestando ciência das pendências listadas.');
+        return;
+      }
+    }
+
     setIsClosingProduct(true);
     try {
       const batch = writeBatch(db);
@@ -3782,7 +4077,8 @@ function ProductDetail() {
         status: 'closed',
         closed_at: now,
         closed_by_id: user?.id,
-        closed_by_name: user?.name
+        closed_by_name: user?.name,
+        forced_with_pendencies: hasPendencies
       });
 
       // Snapshot of cotistas and quotas
@@ -3794,6 +4090,11 @@ function ProductDetail() {
         closed_at: now,
         closed_by_id: user?.id,
         closed_by_name: user?.name,
+        has_pendencies: hasPendencies,
+        available_quotas_on_close: closeMetrics.availableQuotasCount,
+        unpaid_quotas_on_close: closeMetrics.unpaidQuotasCount,
+        pending_amount_on_close: closeMetrics.pendingAmount,
+        delinquents: closeMetrics.delinquents,
         quotas_snapshot: activeQuotas.map(q => ({
           number: q.number,
           owner_name: q.owner_name,
@@ -3811,14 +4112,15 @@ function ProductDetail() {
         user_id: user?.id || 'Sistema',
         user_name: user?.name || 'Sistema',
         action: 'FECHAR_PRODUTO',
-        details: `Fechamento definitivo do produto ${product.name}.`,
+        details: `Fechamento definitivo do produto ${product.name}.${hasPendencies ? ' (FORÇADO com pendências financeiras ou cotas de saldo).' : ''}`,
         product_id: product.id,
         created_at: serverTimestamp()
       });
 
       await batch.commit();
-      alert('Produto encerrado oficialmente!');
+      alert('Produto encerrado oficialmente com snapshot e histórico de fechamento criados!');
       setShowCloseModal(false);
+      setForceCloseChecked(false);
     } catch (err) {
       console.error(err);
       alert('Erro ao fechar produto');
@@ -4033,6 +4335,8 @@ function ProductDetail() {
     setIsPurchasing(true);
     try {
       const now = new Date();
+      const termVer = activeTermObj && typeof activeTermObj.version === 'number' ? activeTermObj.version : 1.0;
+      const termH = await computeHash(termContent);
       
       // Process in batches of 50 (each quota can have many installments)
       const batchSize = 25; // Safer size considering installments
@@ -4125,6 +4429,9 @@ function ProductDetail() {
             total_value: quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0),
             signed_at: now.toISOString(),
             term_content: termContent,
+            term_version: termVer,
+            term_hash: termH,
+            ip_device_info: navigator.userAgent,
             createdAt: serverTimestamp()
           });
 
@@ -4506,6 +4813,19 @@ function ProductDetail() {
 
   if (!product) return <div>Carregando...</div>;
 
+  if (product.status === 'draft' && user?.role === 'client') {
+    return (
+      <div className="flex flex-col items-center justify-center p-20 text-center space-y-4">
+        <Lock className="text-amber-500 w-16 h-16 animate-bounce" size={48} />
+        <h3 className="text-2xl font-bold">Produto em Rascunho</h3>
+        <p className="text-black/50 max-w-sm">Esta oferta ainda está em rascunho e não foi publicada pelo administrador.</p>
+        <button onClick={() => navigate('/products')} className="px-6 py-3 bg-black text-white rounded-2xl font-bold text-sm">
+          Voltar para Produtos
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -4514,6 +4834,11 @@ function ProductDetail() {
             <ArrowLeft size={20} />
           </button>
           <h2 className="text-3xl font-bold tracking-tight">{product.name}</h2>
+          {product.status === 'draft' && (
+            <span className="px-3 py-1 bg-amber-100 text-amber-700 rounded-full text-[10px] font-black uppercase tracking-widest border border-amber-200">
+              Rascunho
+            </span>
+          )}
           {product.status === 'closed' && (
             <span className="px-3 py-1 bg-red-100 text-red-600 rounded-full text-[10px] font-black uppercase tracking-widest border border-red-200">
               Encerrado Oficialmente
@@ -4529,21 +4854,31 @@ function ProductDetail() {
               <Download size={18} /> Relatório de Fechamento
             </button>
           )}
+          {user.role === 'admin' && product.status === 'draft' && (
+            <button 
+              onClick={handlePublishDraft}
+              disabled={publishingDraft}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-indigo-700 transition-all cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={publishingDraft ? "animate-spin" : ""} size={18} />
+              {publishingDraft ? `Publicando (${publishProgress}%)` : 'Publicar Rascunho'}
+            </button>
+          )}
+          {user.role === 'admin' && product.status === 'active' && (
+            <button 
+              onClick={() => setShowCloseModal(true)}
+              className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-red-700 transition-all cursor-pointer"
+            >
+              <X size={18} /> Encerrar Produto
+            </button>
+          )}
           {user.role === 'admin' && product.status !== 'closed' && (
-            <>
-              <button 
-                onClick={() => setShowCloseModal(true)}
-                className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-red-700 transition-all cursor-pointer"
-              >
-                <X size={18} /> Encerrar Produto
-              </button>
-              <button 
-                onClick={() => setIsEditing(!isEditing)}
-                className="px-4 py-2 bg-black text-white rounded-xl text-sm font-bold transition-all"
-              >
-                {isEditing ? 'Cancelar Edição' : 'Editar Produto'}
-              </button>
-            </>
+            <button 
+              onClick={() => setIsEditing(!isEditing)}
+              className="px-4 py-2 bg-black text-white rounded-xl text-sm font-bold transition-all"
+            >
+              {isEditing ? 'Cancelar Edição' : 'Editar Produto'}
+            </button>
           )}
         </div>
       </div>
@@ -4585,7 +4920,8 @@ function ProductDetail() {
                   <div>
                     <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Tipo de Pagamento</label>
                     <select 
-                      className="w-full p-4 bg-black/5 rounded-2xl mt-1"
+                      disabled={product.status !== 'draft'}
+                      className="w-full p-4 bg-black/5 rounded-2xl mt-1 disabled:opacity-50"
                       value={editedProduct.payment_type}
                       onChange={e => setEditedProduct({...editedProduct, payment_type: e.target.value as any})}
                     >
@@ -4604,6 +4940,35 @@ function ProductDetail() {
                     />
                   </div>
                 </div>
+
+                {product.status === 'draft' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Quantidade Geral de Cotas (Alterável em Rascunho)</label>
+                      <input 
+                        type="number"
+                        className="w-full p-4 bg-black/5 rounded-2xl mt-1"
+                        placeholder="Ex: 100"
+                        value={editedProduct.total_quotas || ''}
+                        onChange={e => setEditedProduct({...editedProduct, total_quotas: Number(e.target.value) || 0, available_quotas: Number(e.target.value) || 0})}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-widest opacity-40 ml-1">Valor da Cota em R$ (Alterável em Rascunho)</label>
+                      <input 
+                        type="number"
+                        className="w-full p-4 bg-black/5 rounded-2xl mt-1"
+                        placeholder="Ex: 50"
+                        value={editedProduct.quota_price || ''}
+                        onChange={e => setEditedProduct({...editedProduct, quota_price: Number(e.target.value) || 0})}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl text-[11px] text-amber-800 leading-tight">
+                    🔒 <strong>Variáveis Constitutivas Bloqueadas:</strong> A quantidade geral de cotas ({product.total_quotas}), tipo de pagamento ({product.payment_type === 'installments' ? 'Parcelado' : product.payment_type === 'cash' ? 'À Vista' : 'Recorrente'}) e o valor unitário ({product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}) estão travados porque este ativo já está publicado e ativo.
+                  </div>
+                )}
               </div>
 
               {/* Regra de Inadimplência na Edição */}
@@ -5122,54 +5487,130 @@ function ProductDetail() {
                   className="relative w-[95%] sm:w-full max-w-lg bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl space-y-6 overflow-y-auto max-h-[90vh]"
                 >
                   <div className="text-center">
-                    <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                      <Shield size={40} />
+                    <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Shield size={32} />
                     </div>
-                    <h3 className="text-2xl font-bold">Encerrar Produto Oficialmente?</h3>
-                    <p className="text-black/50 text-sm mt-2">
-                      Esta ação bloqueará definitivamente novas vendas, edições, cancelamentos ou revendas para este produto.
+                    <h3 className="text-2xl font-bold tracking-tight">Encerrar Produto Oficialmente?</h3>
+                    <p className="text-black/50 text-xs mt-1">
+                      Esta ação bloqueará definitivamente novas vendas, edições, ou revendas para este produto.
                     </p>
                   </div>
 
-                  <div className="bg-black/5 p-6 rounded-3xl space-y-4">
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="opacity-50">Cotas Vendidas</span>
-                      <span className="font-bold">{product.sold_quotas} / {product.total_quotas}</span>
+                  {closeMetrics.loading ? (
+                    <div className="flex flex-col items-center justify-center py-6 gap-2">
+                      <RefreshCw className="animate-spin text-black/40" size={24} />
+                      <span className="text-xs text-black/40 font-medium">Analisando pendências do sistema...</span>
                     </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="opacity-50">Total Arrecadado</span>
-                      <span className="font-bold text-emerald-600">
-                        {quotas.filter(q => q.status === 'sold' && q.is_paid).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="opacity-50">Participantes Ativos</span>
-                      <span className="font-bold">{new Set(quotas.filter(q => q.status === 'sold').map(q => q.owner_id)).size}</span>
-                    </div>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="bg-black/5 p-6 rounded-3xl space-y-3">
+                        <div className="text-xs font-bold uppercase opacity-40 tracking-wider">Métricas do Ativo</div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="opacity-50">Cotas Disponíveis</span>
+                          <span className={closeMetrics.availableQuotasCount > 0 ? "font-bold text-amber-600" : "font-bold"}>
+                            {closeMetrics.availableQuotasCount} em aberto
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="opacity-50">Parcelas Pendentes</span>
+                          <span className={closeMetrics.pendingInstallmentsCount > 0 ? "font-bold text-red-500" : "font-bold"}>
+                            {closeMetrics.pendingInstallmentsCount} parcelas ({closeMetrics.pendingAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="opacity-50">Participantes Ativos</span>
+                          <span className="font-bold">{new Set(quotas.filter(q => q.status === 'sold').map(q => q.owner_id)).size}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-sm pt-2 border-t border-black/5">
+                          <span className="opacity-50">Total Arrecadado Real</span>
+                          <span className="font-black text-emerald-600">
+                            {quotas.filter(q => q.status === 'sold' && q.is_paid).reduce((sum, q) => sum + q.price, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </span>
+                        </div>
+                      </div>
 
-                  <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3">
-                    <Info size={18} className="text-red-600 flex-shrink-0" />
-                    <p className="text-[10px] text-red-700 leading-tight">
-                      <strong>ATENÇÃO:</strong> Esta ação é irreversível e cria um marco de segurança imutável para a realização da aposta.
-                    </p>
-                  </div>
+                      {/* Warnings and Delinquent Names */}
+                      {(closeMetrics.availableQuotasCount > 0 || closeMetrics.pendingInstallmentsCount > 0) && (
+                        <div className="p-5 bg-amber-50 rounded-2xl border border-amber-100 space-y-3">
+                          <div className="flex items-start gap-2 text-amber-800 text-xs font-bold">
+                            <Info size={16} className="flex-shrink-0 mt-0.5" />
+                            <span>Contém Pendências Impeditivas!</span>
+                          </div>
+                          <ul className="text-[11px] text-amber-700 list-disc list-inside space-y-1">
+                            {closeMetrics.availableQuotasCount > 0 && (
+                              <li>Existem {closeMetrics.availableQuotasCount} cotas não vendidas que serão expiradas permanentemente.</li>
+                            )}
+                            {closeMetrics.pendingInstallmentsCount > 0 && (
+                              <li>Há {closeMetrics.pendingInstallmentsCount} parcelas em aberto, somando {closeMetrics.pendingAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.</li>
+                            )}
+                          </ul>
+                          {closeMetrics.delinquents.length > 0 && (
+                            <div className="text-[10px] text-amber-800 border-t border-amber-200/50 pt-2 font-mono">
+                              <strong>Cotistas Pendentes:</strong> {closeMetrics.delinquents.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <button 
-                      onClick={() => setShowCloseModal(false)}
-                      className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold order-2 sm:order-1"
-                    >
-                      Voltar
-                    </button>
-                    <button 
-                      onClick={handleCloseProduct}
-                      disabled={isClosingProduct}
-                      className="w-full sm:flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-neutral-900 transition-all flex items-center justify-center gap-2 order-1 sm:order-2"
-                    >
-                      {isClosingProduct ? <RefreshCw className="animate-spin" size={20} /> : 'Confirmar Fechamento Definitivo'}
-                    </button>
-                  </div>
+                      {/* Mandatory Blockers and RBAC Controls */}
+                      {(closeMetrics.availableQuotasCount > 0 || closeMetrics.pendingInstallmentsCount > 0) ? (
+                        user?.role !== 'admin' ? (
+                          <div className="p-4 bg-red-50 border border-red-100 rounded-2xl flex items-start gap-3">
+                            <Shield size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+                            <p className="text-[11px] text-red-700 font-bold leading-normal">
+                              🔒 Bloqueio de Segurança:<br />
+                              Existem pendências financeiras ou cotas em aberto neste produto. Apenas o Administrador Master tem autorização para fechar o produto e assumir tais pendências.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="p-4 bg-blue-50 border border-blue-100 rounded-2xl space-y-3">
+                            <p className="text-[11px] text-blue-700 leading-tight">
+                              <strong>Bypass Master (Forçar Encerramento):</strong> Como administrador master, você pode prosseguir mesmo com pendências financeiras. Marque a declaração abaixo para habilitar o encerramento.
+                            </p>
+                            <label className="flex items-center gap-2 cursor-pointer select-none">
+                              <input 
+                                type="checkbox" 
+                                className="rounded text-blue-600 focus:ring-blue-500" 
+                                checked={forceCloseChecked}
+                                onChange={e => setForceCloseChecked(e.target.checked)}
+                              />
+                              <span className="text-[11px] text-blue-800 font-bold">Declaro ciência e assumo as pendências financeiras listadas.</span>
+                            </label>
+                          </div>
+                        )
+                      ) : (
+                        <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-3">
+                          <Check size={18} className="text-emerald-600 flex-shrink-0" />
+                          <p className="text-[10px] text-emerald-700 leading-tight">
+                            <strong>Tudo limpo!</strong> Todas as cotas foram vendidas e quitadas integralmente. Pronto para encerramento regular.
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                        <button 
+                          onClick={() => {
+                            setShowCloseModal(false);
+                            setForceCloseChecked(false);
+                          }}
+                          className="w-full sm:flex-1 py-4 bg-black/5 text-black rounded-2xl font-bold order-2 sm:order-1 text-sm"
+                        >
+                          Voltar
+                        </button>
+                        <button 
+                          onClick={handleCloseProduct}
+                          disabled={
+                            isClosingProduct || 
+                            (((closeMetrics.availableQuotasCount > 0 || closeMetrics.pendingInstallmentsCount > 0)) && 
+                              (user?.role !== 'admin' || !forceCloseChecked))
+                          }
+                          className="w-full sm:flex-[2] py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-neutral-900 duration-200 transition-all flex items-center justify-center gap-2 order-1 sm:order-2 text-sm disabled:opacity-40 disabled:hover:bg-red-600"
+                        >
+                          {isClosingProduct ? <RefreshCw className="animate-spin" size={20} /> : 'Confirmar Fechamento Definitivo'}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </motion.div>
               </div>
             )}
@@ -5908,13 +6349,76 @@ function ClientsList() {
 
   const handleCreateUser = async () => {
     if (!tenantId) return;
+    if (!newUser.name || !newUser.email) {
+      alert('Nome e e-mail são obrigatórios.');
+      return;
+    }
+
+    if (newUser.cpf) {
+      if (!validateCPF(newUser.cpf)) {
+        alert('CPF inválido. Por favor, verifique os dígitos verificadores.');
+        return;
+      }
+    }
+
     try {
+      const usersRef = collection(db, 'tenants', tenantId, 'users');
+      
+      // Check if CPF is already used
+      if (newUser.cpf) {
+        const cleanCPF = newUser.cpf.replace(/\D/g, '');
+        const formattedCPF = maskCPF(cleanCPF);
+        const cpfQuery = query(usersRef, where('cpf', '==', formattedCPF));
+        const cpfSnap = await getDocs(cpfQuery);
+        
+        if (!cpfSnap.empty) {
+          // Reutilizar cadastro existente, permitindo apenas atualização dos dados
+          const existingUserDoc = cpfSnap.docs[0];
+          const existingData = existingUserDoc.data();
+          
+          await updateDoc(doc(db, 'tenants', tenantId, 'users', existingUserDoc.id), {
+            name: newUser.name,
+            phone: newUser.phone || existingData.phone || '',
+            address: newUser.address || existingData.address || '',
+            pix_key: newUser.pix_key || existingData.pix_key || '',
+            role: newUser.role || existingData.role || 'client'
+          });
+
+          // Log audit
+          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+          await setDoc(auditRef, {
+            user_id: user?.id || 'Sistema',
+            user_name: user?.name || 'Sistema',
+            action: 'REUTILIZAR_ATUALIZAR_USUARIO',
+            details: `CPF ${formattedCPF} já cadastrado. Cadastro correspondente de ${existingData.name} foi atualizado e reutilizado.`,
+            created_at: serverTimestamp()
+          });
+
+          alert(`O CPF ${formattedCPF} já estava cadastrado como usuário (${existingData.name}). Os dados adicionais fornecidos foram utilizados para atualizar e reutilizar este cadastro.`);
+          setShowCreate(false);
+          setNewUser({ name: '', email: '', role: 'client', cpf: '', pix_key: '' });
+          return;
+        }
+      }
+
+      // Check if email already existed as a document ID
       const userRef = doc(db, 'tenants', tenantId, 'users', newUser.email);
-      await setDoc(userRef, {
-        ...newUser,
-        tenant_id: tenantId,
-        created_at: serverTimestamp()
-      });
+      const userDocSnap = await getDoc(userRef);
+      if (userDocSnap.exists()) {
+        await updateDoc(userRef, {
+          name: newUser.name,
+          role: newUser.role || 'client',
+          cpf: newUser.cpf || userDocSnap.data().cpf || '',
+          pix_key: newUser.pix_key || userDocSnap.data().pix_key || ''
+        });
+        alert('E-mail já cadastrado. O cadastro existente teve as informações mescladas com sucesso.');
+      } else {
+        await setDoc(userRef, {
+          ...newUser,
+          tenant_id: tenantId,
+          created_at: serverTimestamp()
+        });
+      }
 
       // Log audit
       const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
@@ -5922,7 +6426,7 @@ function ClientsList() {
         user_id: user?.id || 'Sistema',
         user_name: user?.name || 'Sistema',
         action: 'CRIAR_USUARIO',
-        details: `Criou o usuário ${newUser.name} (${newUser.email})`,
+        details: `Criou ou mesclou o usuário ${newUser.name} (${newUser.email})`,
         created_at: serverTimestamp()
       });
 
@@ -6293,19 +6797,38 @@ function TermsPage() {
   const handleSave = async () => {
     if (!tenantId) return;
     try {
+      const parsedVersion = term && typeof (term as any).version === 'number' ? (term as any).version : 1.0;
+      const nextVersion = Math.round((parsedVersion + 0.1) * 10) / 10;
+
       if (term) {
-        await updateDoc(doc(db, 'tenants', tenantId, 'terms', term.id), { content });
-        setTerm({ ...term, content });
+        const batch = writeBatch(db);
+        // Deactivate old one
+        const oldRef = doc(db, 'tenants', tenantId, 'terms', term.id);
+        batch.update(oldRef, { is_active: false });
+
+        // Add new one with incremented version
+        const newRef = doc(collection(db, 'tenants', tenantId, 'terms'));
+        batch.set(newRef, {
+          content,
+          is_active: true,
+          version: nextVersion,
+          parent_id: term.id,
+          created_at: serverTimestamp()
+        });
+
+        await batch.commit();
+        setTerm({ id: newRef.id, content, version: nextVersion, parent_id: term.id } as any);
       } else {
         const docRef = await addDoc(collection(db, 'tenants', tenantId, 'terms'), {
           content,
           is_active: true,
+          version: 1.0,
           created_at: serverTimestamp()
         });
-        setTerm({ id: docRef.id, content });
+        setTerm({ id: docRef.id, content, version: 1.0 } as any);
       }
       setIsEditing(false);
-      alert('Termo atualizado com sucesso!');
+      alert('Nova versão do termo salva e publicada com sucesso! As versões antigas foram arquivadas de forma imutável.');
     } catch (err) {
       console.error(err);
       alert('Erro ao salvar termo');
@@ -6505,7 +7028,9 @@ function TermsPage() {
       <header className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Termo de Adesão</h2>
-          <p className="text-black/50">Visualize o termo de compromisso</p>
+          <p className="text-black/50">
+            {term && (term as any).version ? `Versão ${(term as any).version.toFixed(1)}` : 'Versão Inicial'} • Visualize o termo de compromisso
+          </p>
         </div>
         {user?.role === 'admin' && (
           <button 
@@ -7283,66 +7808,98 @@ function PaymentManagement() {
     
     setIsProcessing(true);
     try {
-      const batch = writeBatch(db);
       const now = new Date().toISOString();
       let ownerId = '';
       const affectedQuotaIds = new Set<string>();
       
+      // Step A: Pre-fetch affected installments to find quota_id mappings & do quota-installment queries safely
+      const installmentDocsData: any[] = [];
       for (const id of ids) {
-        const instDoc = await getDoc(doc(db, 'tenants', tenantId, 'installments', id));
+        const instDocRef = doc(db, 'tenants', tenantId, 'installments', id);
+        const instDoc = await getDoc(instDocRef);
         if (instDoc.exists()) {
           const data = instDoc.data();
-          ownerId = data.owner_id;
+          installmentDocsData.push({ id, ...data });
           affectedQuotaIds.add(data.quota_id);
-          
-          batch.update(instDoc.ref, {
+          ownerId = data.owner_id;
+        }
+      }
+
+      // Pre-fetch all installments for each affected quota
+      const quotasInstallmentsMap: { [key: string]: any[] } = {};
+      for (const qId of affectedQuotaIds) {
+        const qRef = collection(db, 'tenants', tenantId, 'installments');
+        const instSnap = await getDocs(query(qRef, where('quota_id', '==', qId)));
+        quotasInstallmentsMap[qId] = instSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
+
+      // Step B: Run Firestore Transaction for atomic read/writes
+      await runTransaction(db, async (transaction) => {
+        // 1. Double check and read all installments being marked as paid
+        for (const id of ids) {
+          const instRef = doc(db, 'tenants', tenantId, 'installments', id);
+          const instSnap = await transaction.get(instRef);
+          if (instSnap.exists()) {
+            const data = instSnap.data();
+            if (data.status !== 'pending') {
+              throw new Error(`A parcela número ${data.quota_number || id} já possui baixa registrada ou não está pendente.`);
+            }
+          }
+        }
+
+        // 2. Read Quotas to be updated
+        const quotaRefsMap: { [key: string]: any } = {};
+        for (const qId of affectedQuotaIds) {
+          const qRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+          await transaction.get(qRef); // register read first
+          quotaRefsMap[qId] = qRef;
+        }
+
+        // 3. Perform Writes inside Transaction
+        for (const id of ids) {
+          const instRef = doc(db, 'tenants', tenantId, 'installments', id);
+          transaction.update(instRef, {
             status: 'paid',
-            paid_at: now
+            paid_at: now,
+            paid_by: user?.email || user?.name || 'Sistema'
           });
         }
-      }
 
-      // 1. Check quitação for each affected quota
-      for (const qId of affectedQuotaIds) {
-        const qRef = doc(db, 'tenants', tenantId, 'quotas', qId);
-        const installmentsQ = query(
-          collection(db, 'tenants', tenantId, 'installments'),
-          where('quota_id', '==', qId)
-        );
-        const instSnapshot = await getDocs(installmentsQ);
-        
-        // We consider it paid if there are NO 'pending' installments left
-        // Note: we account for the ones we just marked as paid in the batch conceptually
-        const remainingPending = instSnapshot.docs.filter(d => 
-          d.data().status === 'pending' && !ids.includes(d.id)
-        );
-        
-        if (remainingPending.length === 0) {
-          batch.update(qRef, { is_paid: true });
+        // 4. Update quotas that are now fully paid
+        for (const qId of affectedQuotaIds) {
+          const qRef = quotaRefsMap[qId];
+          const allInsts = quotasInstallmentsMap[qId] || [];
+          
+          // Remaining pending are installments that are currently pending in database and NOT in the ids we are paying
+          const remainingPending = allInsts.filter(inst => 
+            inst.status === 'pending' && !ids.includes(inst.id)
+          );
+
+          if (remainingPending.length === 0) {
+            transaction.update(qRef, { is_paid: true });
+          }
         }
-      }
 
-      // Log audit
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      batch.set(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'CONFIRMAR_PAGAMENTO',
-        details: `Confirmou o recebimento de ${ids.length} parcelas`,
-        created_at: serverTimestamp()
+        // 5. Add audit log inside transaction
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        transaction.set(auditRef, {
+          user_id: user?.id || 'Sistema',
+          user_name: user?.name || 'Sistema',
+          action: 'CONFIRMAR_PAGAMENTO',
+          details: `Confirmou atomicamente o recebimento de ${ids.length} parcelas.`,
+          created_at: serverTimestamp()
+        });
       });
 
-      await batch.commit();
-      
       // Sync installments for the owner after payment
       if (ownerId) {
         syncUserInstallments(tenantId, ownerId);
       }
 
       alert('Pagamentos confirmados com sucesso!');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao confirmar pagamentos');
+      alert(err.message || 'Erro ao confirmar pagamentos');
     } finally {
       setIsProcessing(false);
     }

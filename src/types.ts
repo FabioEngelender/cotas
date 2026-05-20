@@ -24,7 +24,7 @@ export interface Product {
   payment_type: 'cash' | 'installments' | 'recurrent';
   expiration_month?: string;
   created_at: string;
-  status: 'active' | 'closed';
+  status: 'draft' | 'active' | 'closed' | 'archived';
   closed_at?: string;
   closed_by_id?: string;
   closed_by_name?: string;
