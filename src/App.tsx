@@ -3349,8 +3349,32 @@ function ProductsList() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {products.map(product => {
-          const productQuotas = quotas.filter(q => q.product_id === product.id && q.status !== 'grouped');
-          const availableCount = productQuotas.filter(q => q.status === 'available').length;
+          const pQuotas = quotas.filter(q => q.product_id === product.id);
+          const parentFractions: { [parentId: string]: number } = {};
+          pQuotas.forEach(q => {
+            if (q.parent_id) {
+              parentFractions[q.parent_id] = (parentFractions[q.parent_id] || 0) + 1;
+            }
+          });
+
+          let availableWeight = 0;
+          pQuotas.forEach(q => {
+            if (q.status === 'grouped') return;
+            let weight = 1;
+            if (q.parent_id) {
+              const totalFracs = parentFractions[q.parent_id] || 1;
+              weight = 1 / totalFracs;
+            }
+            if (q.status === 'available') {
+              availableWeight += weight;
+            }
+          });
+
+          const roundedAvailable = Math.round(availableWeight * 100) / 100;
+          const isEsgotado = roundedAvailable < 0.01;
+          const formattedAvailable = roundedAvailable % 1 === 0 
+            ? Math.round(roundedAvailable).toString() 
+            : roundedAvailable.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
           
           return (
             <Link key={product.id} to={`/products/${product.id}`} className="group relative">
@@ -3367,13 +3391,13 @@ function ProductsList() {
                       <Package size={40} className="text-black/10" />
                     </div>
                   )}
-                  {availableCount === 0 && (
+                  {isEsgotado && (
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-10">
                       <span className="px-6 py-2 bg-white text-black rounded-full font-bold text-sm tracking-widest uppercase">Esgotado</span>
                     </div>
                   )}
                   <div className="absolute top-4 right-4 px-3 py-1 bg-white/90 backdrop-blur rounded-full text-[10px] font-bold uppercase tracking-widest">
-                    {availableCount} Disponíveis
+                    {formattedAvailable} Disponíveis
                   </div>
                   {user?.role === 'admin' && (
                     <button 
@@ -3606,6 +3630,50 @@ function ProductDetail() {
   const [managers, setManagers] = useState<User[]>([]);
   const { user, tenantId, setUser } = React.useContext(AuthContext)!;
   const navigate = useNavigate();
+
+  const getSubdivisionMetrics = () => {
+    const parentChildrenMap: { [parentId: string]: number } = {};
+    quotas.forEach(q => {
+      if (q.parent_id) {
+        parentChildrenMap[q.parent_id] = (parentChildrenMap[q.parent_id] || 0) + 1;
+      }
+    });
+
+    let totalWeight = 0;
+    let availableWeight = 0;
+    let soldWeight = 0;
+
+    quotas.forEach(q => {
+      if (q.status === 'grouped') {
+        return;
+      }
+      let weight = 1;
+      if (q.parent_id) {
+        const totalFractions = parentChildrenMap[q.parent_id] || 1;
+        weight = 1 / totalFractions;
+      }
+      totalWeight += weight;
+      if (q.status === 'available') {
+        availableWeight += weight;
+      } else if (q.status === 'sold' || q.status === 'defaulted') {
+        soldWeight += weight;
+      }
+    });
+
+    return {
+      total: totalWeight,
+      available: availableWeight,
+      sold: soldWeight
+    };
+  };
+
+  const formatWeight = (val: number) => {
+    const rounded = Math.round(val * 1000) / 1000;
+    if (Math.abs(rounded - Math.round(rounded)) < 1e-4) {
+      return Math.round(rounded).toString();
+    }
+    return rounded.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+  };
 
   const getDynamicInstallmentCount = () => {
     if (!product || !product.expiration_month) return 0;
@@ -5870,38 +5938,42 @@ function ProductDetail() {
 
           <div className="bg-black text-white rounded-3xl p-8 shadow-xl">
             <p className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-4">Resumo do Ativo</p>
-            <div className="space-y-4">
-              <div className="flex justify-between">
-                <span className="opacity-60">Total de Cotas</span>
-                <span className="font-bold">{quotas.filter(q => q.status !== 'grouped').length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="opacity-60">Disponíveis</span>
-                <span className="font-bold text-emerald-400">{quotas.filter(q => q.status === 'available').length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="opacity-60">Vendidas</span>
-                <span className="font-bold text-red-400">{quotas.filter(q => q.status === 'sold' || q.status === 'defaulted').length}</span>
-              </div>
-              <div className="pt-4 border-t border-white/10">
-                <p className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-1">Progresso de Venda</p>
-                <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-emerald-500" 
-                    style={{ 
-                      width: `${(quotas.filter(q => q.status === 'sold' || q.status === 'defaulted').length / 
-                        (quotas.filter(q => q.status !== 'grouped').length || 1)) * 100}%` 
-                    }}
-                  />
+            {(() => {
+              const metrics = getSubdivisionMetrics();
+              return (
+                <div className="space-y-4">
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Total de Cotas</span>
+                    <span className="font-bold">{formatWeight(metrics.total)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Disponíveis</span>
+                    <span className="font-bold text-emerald-400">{formatWeight(metrics.available)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Vendidas</span>
+                    <span className="font-bold text-red-400">{formatWeight(metrics.sold)}</span>
+                  </div>
+                  <div className="pt-4 border-t border-white/10">
+                    <p className="text-[10px] font-bold uppercase tracking-widest opacity-50 mb-1">Progresso de Venda</p>
+                    <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-emerald-500" 
+                        style={{ 
+                          width: `${(metrics.sold / (metrics.total || 1)) * 100}%` 
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="pt-4 border-t border-white/10 flex justify-between items-end">
+                    <span className="opacity-60">Valor da Cota</span>
+                    <span className="text-2xl font-bold">
+                      {product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </span>
+                  </div>
                 </div>
-              </div>
-              <div className="pt-4 border-t border-white/10 flex justify-between items-end">
-                <span className="opacity-60">Valor da Cota</span>
-                <span className="text-2xl font-bold">
-                  {product.quota_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </span>
-              </div>
-            </div>
+              );
+            })()}
           </div>
         </div>
       </div>
