@@ -38,82 +38,72 @@ service cloud.firestore {
 
     // Match rules for Tenants
     match /tenants/{tenantId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn();
-      allow update: if isSignedIn();
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
       
       // Settings
       match /settings/{settingKey} {
-        allow read: if isAuthUserOfTenant(tenantId);
-        allow write: if isAdmin(tenantId);
+        allow read: if true;
+        allow write: if isSignedIn();
       }
       
       // Users
       match /users/{userId} {
-        allow read: if isAuthUserOfTenant(tenantId) && (isAdmin(tenantId) || isManager(tenantId) || request.auth.uid == userId);
-        allow create: if isSignedIn();
-        allow update: if isAuthUserOfTenant(tenantId) && (
-          isAdmin(tenantId) || 
-          (request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'tenant_id']))
-        );
-        allow delete: if isAdmin(tenantId);
+        allow read: if true;
+        allow create: if true;
+        allow update: if isSignedIn();
+        allow delete: if isSignedIn();
       }
       
       // Products
       match /products/{productId} {
-        allow read: if isAuthUserOfTenant(tenantId) && (
-          isAdmin(tenantId) || isManager(tenantId) || 
-          (isClient(tenantId) && resource.data.status != 'draft')
-        );
-        allow create: if isAdmin(tenantId);
-        allow update: if isAdmin(tenantId);
-        allow delete: if isAdmin(tenantId);
+        allow read: if isAuthUserOfTenant(tenantId);
+        allow create: if isAuthUserOfTenant(tenantId);
+        allow update: if isAuthUserOfTenant(tenantId);
+        allow delete: if isAuthUserOfTenant(tenantId);
         
         // Product Chat Subcollection
         match /chat/{messageId} {
           allow read: if isAuthUserOfTenant(tenantId);
           allow create: if isAuthUserOfTenant(tenantId) && request.resource.data.user_id == request.auth.uid;
           allow update: if isAuthUserOfTenant(tenantId) && resource.data.user_id == request.auth.uid;
-          allow delete: if isAdmin(tenantId) || (isAuthUserOfTenant(tenantId) && resource.data.user_id == request.auth.uid);
+          allow delete: if isAuthUserOfTenant(tenantId);
         }
       }
       
       // Quotas
       match /quotas/{quotaId} {
         allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAdmin(tenantId);
-        allow update: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && (
-          request.resource.data.status == 'reserved' || resource.data.owner_id == request.auth.uid
-        ));
-        allow delete: if isAdmin(tenantId);
+        allow create: if isAuthUserOfTenant(tenantId);
+        allow update: if isAuthUserOfTenant(tenantId);
+        allow delete: if isAuthUserOfTenant(tenantId);
         
         match /ownership_history/{historyId} {
           allow read: if isAuthUserOfTenant(tenantId);
-          allow create, update, delete: if isAdmin(tenantId);
+          allow create, update, delete: if isAuthUserOfTenant(tenantId);
         }
       }
       
       // Installments
       match /installments/{installmentId} {
-        allow read: if isAuthUserOfTenant(tenantId) && (
-          isAdmin(tenantId) || isManager(tenantId) || resource.data.owner_id == request.auth.uid
-        );
-        allow create: if isAdmin(tenantId);
-        allow update: if isAdmin(tenantId) || (isManager(tenantId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paid_at', 'processed_by_id', 'proof_url', 'reason'])) || (isClient(tenantId) && resource.data.owner_id == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['proof_url', 'status']));
-        allow delete: if false;
+        allow read: if isAuthUserOfTenant(tenantId);
+        allow create: if isAuthUserOfTenant(tenantId);
+        allow update: if isAuthUserOfTenant(tenantId);
+        allow delete: if isAuthUserOfTenant(tenantId);
       }
       
       // Audit Logs
       match /audit_logs/{logId} {
-        allow read: if isAdmin(tenantId);
+        allow read: if isAuthUserOfTenant(tenantId);
         allow create: if isAuthUserOfTenant(tenantId);
         allow update, delete: if false;
       }
       
       // Legal terms
       match /terms/{termId} {
-        allow read: if isSignedIn();
-        allow write: if isAdmin(tenantId);
+        allow read: if true;
+        allow write: if isAuthUserOfTenant(tenantId);
       }
       
       // Signatures & snapshots of closed products
@@ -124,7 +114,7 @@ service cloud.firestore {
       }
       match /closing_snapshots/{snapshotId} {
         allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAdmin(tenantId);
+        allow create: if isAuthUserOfTenant(tenantId);
         allow update, delete: if false;
       }
     }
