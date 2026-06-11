@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Users, Shield } from 'lucide-react';
+import { Users, Shield, Loader2, Check } from 'lucide-react';
+import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db, auth } from '../firebase.js';
 import { cn } from '../utils/cn.js';
 
 interface InviteModalProps {
@@ -11,28 +13,51 @@ interface InviteModalProps {
 }
 
 export function InviteModal({ isOpen, onClose, tenantId, userRole }: InviteModalProps) {
-  const [copied, setCopied] = useState<string | null>(null);
-  const baseUrl = window.location.origin;
+  const [copiedLabel, setCopiedLabel] = useState<string | null>(null);
+  const [loadingRole, setLoadingRole] = useState<string | null>(null);
+  const [activeLinks, setActiveLinks] = useState<{ [role: string]: string }>({});
   
-  const links = [
-    { 
-      label: userRole === 'client' ? 'Compartilhar Oportunidade' : 'Convite para Cliente', 
-      url: `${baseUrl}/register-client/${tenantId}`, 
-      icon: <Users size={20} />,
-      variant: userRole === 'client' ? 'default' : 'client'
-    },
-    ...(userRole === 'admin' ? [{ 
-      label: 'Convite para Gerente', 
-      url: `${baseUrl}/register-manager/${tenantId}`, 
-      icon: <Shield size={20} />,
-      variant: 'manager'
-    }] : []),
-  ];
+  const baseUrl = window.location.origin;
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(label);
-    setTimeout(() => setCopied(null), 2000);
+  const generateInvite = async (role: 'client' | 'manager') => {
+    if (!tenantId) return;
+    setLoadingRole(role);
+    try {
+      // 1. Generate unique document reference
+      const invitesRef = collection(db, 'tenants', tenantId, 'invites');
+      const inviteDoc = doc(invitesRef);
+      const inviteId = inviteDoc.id;
+
+      // 2. Set expiry date (7 days from now)
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+
+      // 3. Store invite token details securely
+      await setDoc(inviteDoc, {
+        id: inviteId,
+        tenant_id: tenantId,
+        role: role,
+        expires_at: expiresAt.toISOString(),
+        used_at: null,
+        used_by: null,
+        created_at: serverTimestamp(),
+        created_by: auth.currentUser?.uid || 'Sistema'
+      });
+
+      // 4. Construct register Link
+      const inviteLink = `${baseUrl}/register-${role}/${tenantId}/${inviteId}`;
+      setActiveLinks(prev => ({ ...prev, [role]: inviteLink }));
+
+      // 5. Copy link to clipboard
+      await navigator.clipboard.writeText(inviteLink);
+      setCopiedLabel(role);
+      setTimeout(() => setCopiedLabel(null), 2500);
+    } catch (err) {
+      console.error('Erro ao gerar convite no Firebase:', err);
+      alert('Falha ao gerar link de convite seguro.');
+    } finally {
+      setLoadingRole(null);
+    }
   };
 
   if (!isOpen) return null;
@@ -45,49 +70,92 @@ export function InviteModal({ isOpen, onClose, tenantId, userRole }: InviteModal
         animate={{ scale: 1, opacity: 1 }}
         className="relative w-[95%] sm:w-full max-w-md bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
       >
-        <h3 className="text-2xl font-bold mb-6">{userRole === 'client' ? 'Convidar Amigo' : 'Convidar para a Loja'}</h3>
-        <div className="space-y-4">
-          {links.map((link, i) => (
-            <div 
-              key={i} 
-              className={cn(
-                "p-5 rounded-[24px] space-y-3 transition-all border border-black/5",
-                link.variant === 'client' ? "bg-emerald-400 text-black shadow-xl shadow-emerald-400/20" :
-                link.variant === 'manager' ? "bg-amber-400 text-black shadow-xl shadow-amber-400/20" :
-                "bg-black/5"
-              )}
-            >
-              <div className={cn(
-                "flex items-center gap-2 text-[10px] font-black uppercase tracking-widest",
-                link.variant !== 'default' ? "text-black" : "opacity-40"
-              )}>
-                {link.icon} {link.label}
-              </div>
-              <div className="flex gap-2">
+        <h3 className="text-2xl font-bold mb-6">
+          {userRole === 'client' ? 'Convidar Amigo' : 'Gestão de Convites'}
+        </h3>
+        <p className="text-xs text-black/50 mb-6">
+          Os convites gerados abaixo são de **uso único, possuem validade de 7 dias** e ficam vinculados de forma segura a esta loja.
+        </p>
+
+        <div className="space-y-6">
+          {/* Client Invite Section */}
+          <div className="p-5 rounded-[24px] border border-black/5 bg-emerald-400 text-black shadow-xl shadow-emerald-400/10 space-y-3">
+            <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-black">
+              <Users size={16} /> Compartilhar Link Cliente
+            </div>
+            
+            <p className="text-[11px] text-black/75">
+              Ideal para investidores ou cotistas comprarem cotas e frações de forma autônoma.
+            </p>
+
+            <div className="flex flex-col gap-2 pt-2">
+              {activeLinks['client'] && (
                 <input 
                   readOnly 
-                  value={link.url} 
-                  className={cn(
-                    "flex-1 rounded-xl px-3 py-2 text-[10px] font-mono truncate border",
-                    link.variant !== 'default' ? "bg-white/80 border-black/10 text-black" : "bg-white border-black/5 text-[#141414]"
-                  )}
+                  value={activeLinks['client']} 
+                  className="w-full rounded-xl px-3 py-2 text-[10px] font-mono truncate border bg-white/80 border-black/10 text-black outline-none"
                 />
+              )}
+              <button 
+                disabled={loadingRole !== null}
+                onClick={() => generateInvite('client')}
+                className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-tight bg-black text-white hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
+              >
+                {loadingRole === 'client' ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : copiedLabel === 'client' ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" /> Link Copiado!
+                  </>
+                ) : (
+                  'Gerar e Copiar Convite Seguro'
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Manager Invite Section (only if Admin) */}
+          {userRole === 'admin' && (
+            <div className="p-5 rounded-[24px] border border-black/5 bg-amber-400 text-black shadow-xl shadow-amber-400/10 space-y-3">
+              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-black">
+                <Shield size={16} /> Convite para Gerente
+              </div>
+              
+              <p className="text-[11px] text-black/75">
+                Permite registro de novos gerentes de contas habilitados para baixa financeira de pagamentos.
+              </p>
+
+              <div className="flex flex-col gap-2 pt-2">
+                {activeLinks['manager'] && (
+                  <input 
+                    readOnly 
+                    value={activeLinks['manager']} 
+                    className="w-full rounded-xl px-3 py-2 text-[10px] font-mono truncate border bg-white/80 border-black/10 text-black outline-none"
+                  />
+                )}
                 <button 
-                  onClick={() => copyToClipboard(link.url, link.label)}
-                  className={cn(
-                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-tighter hover:scale-105 transition-all shadow-md active:scale-95",
-                    link.variant !== 'default' ? "bg-black text-white" : "bg-black text-white"
-                  )}
+                  disabled={loadingRole !== null}
+                  onClick={() => generateInvite('manager')}
+                  className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-tight bg-black text-white hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer border-none"
                 >
-                  {copied === link.label ? 'Pronto!' : 'Copiar'}
+                  {loadingRole === 'manager' ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                  ) : copiedLabel === 'manager' ? (
+                    <>
+                      <Check className="w-4 h-4 text-amber-400" /> Link Copiado!
+                    </>
+                  ) : (
+                    'Gerar e Copiar Convite Gerente'
+                  )}
                 </button>
               </div>
             </div>
-          ))}
+          )}
         </div>
+
         <button 
           onClick={onClose}
-          className="w-full mt-8 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all"
+          className="w-full mt-8 py-4 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all cursor-pointer border-none"
         >
           Fechar
         </button>

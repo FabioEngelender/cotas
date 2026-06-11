@@ -499,120 +499,134 @@ export default function ProductDetailPage() {
     setIsProcessingCancellation(true);
     try {
       const { quotaId, totalPaid, retentionValue } = cancellationData;
-      const batch = writeBatch(db);
       const now = new Date().toISOString();
 
-      const quota = quotas.find(q => q.id === quotaId);
-
-      // 1. Update Quota
-      const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
-      batch.update(quotaRef, {
-        status: 'available',
-        owner_id: deleteField(),
-        owner_name: deleteField(),
-        owner_cpf: deleteField(),
-        sold_at: deleteField(),
-        is_paid: deleteField()
-      });
-
-      // 2. Mark pending installments as cancelled
+      // Fetch pending installments beforehand to have them inside the custom transaction read block
       const installmentsRef = collection(db, 'tenants', tenantId, 'installments');
       const q = query(installmentsRef, where('quota_id', '==', quotaId), where('status', '==', 'pending'));
-      const snapshot = await getDocs(q);
-      snapshot.docs.forEach(d => {
-        batch.update(d.ref, { status: 'cancelled', cancelled_at: now });
-      });
+      const instSnapshot = await getDocs(q);
 
-      // 3. Create Refund Installment (to balance totals)
-      if (manualRefundValue > 0) {
-        const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(refundRef, {
-          quota_id: quotaId,
-          quota_number: cancellationData.quotaNumber,
-          product_id: product.id,
-          product_name: product.name,
-          owner_id: quota?.owner_id || '',
-          owner_name: quota?.owner_name || '',
-          owner_cpf: quota?.owner_cpf || '',
-          amount: -manualRefundValue,
-          status: 'refund',
-          reason: `Reembolso de cancelamento: ${cancellationReason}`,
-          proof_url: cancellationProofUrl || '',
-          paid_at: now,
-          due_date: now.split('T')[0],
-          createdAt: serverTimestamp()
-        });
-      }
-
-      // 3.1 Create Retention Record
-      if (retentionValue > 0) {
-        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(retentionRef, {
-          quota_id: quotaId,
-          quota_number: cancellationData.quotaNumber,
-          product_id: product.id,
-          product_name: product.name,
-          owner_id: quota?.owner_id || '',
-          owner_name: quota?.owner_name || '',
-          amount: retentionValue,
-          status: 'retention',
-          reason: `Retenção administrativa: ${cancellationReason}`,
-          paid_at: now,
-          due_date: now.split('T')[0],
-          createdAt: serverTimestamp()
-        });
-      }
-
-      // 4. Ownership History Entry (End of current)
-      const previousOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
-      batch.set(previousOwnerLogRef, {
-        user_id: quota?.owner_id || '',
-        user_name: quota?.owner_name || '',
-        joined_at: quota?.sold_at || now,
-        left_at: now,
-        exit_type: 'cancellation',
-        financial: {
-          total_paid: totalPaid,
-          retention_value: retentionValue,
-          refund_value: manualRefundValue
+      await runTransaction(db, async (transaction) => {
+        const quotaRef = doc(db, 'tenants', tenantId, 'quotas', quotaId);
+        const quotaSnap = await transaction.get(quotaRef);
+        if (!quotaSnap.exists()) {
+          throw new Error('Cota não encontrada.');
         }
+
+        const quotaData = quotaSnap.data();
+        if (quotaData.status === 'available') {
+          throw new Error('Esta cota já foi cancelada ou está disponível.');
+        }
+
+        // 1. Update Quota status atomically
+        transaction.update(quotaRef, {
+          status: 'available',
+          owner_id: deleteField(),
+          owner_name: deleteField(),
+          owner_cpf: deleteField(),
+          sold_at: deleteField(),
+          is_paid: deleteField()
+        });
+
+        // 2. Mark pending installments as cancelled
+        for (const instDoc of instSnapshot.docs) {
+          const instRef = doc(db, 'tenants', tenantId, 'installments', instDoc.id);
+          const instSnap = await transaction.get(instRef);
+          if (instSnap.exists() && instSnap.data().status === 'pending') {
+            transaction.update(instRef, { status: 'cancelled', cancelled_at: now });
+          }
+        }
+
+        // 3. Create Refund Installment (to balance totals)
+        if (manualRefundValue > 0) {
+          const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+          transaction.set(refundRef, {
+            quota_id: quotaId,
+            quota_number: cancellationData.quotaNumber,
+            product_id: product.id,
+            product_name: product.name,
+            owner_id: quotaData.owner_id || '',
+            owner_name: quotaData.owner_name || '',
+            owner_cpf: quotaData.owner_cpf || '',
+            amount: -manualRefundValue,
+            status: 'refund',
+            reason: `Reembolso de cancelamento: ${cancellationReason}`,
+            proof_url: cancellationProofUrl || '',
+            paid_at: now,
+            due_date: now.split('T')[0],
+            createdAt: serverTimestamp()
+          });
+        }
+
+        // 3.1 Create Retention Record
+        if (retentionValue > 0) {
+          const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+          transaction.set(retentionRef, {
+            quota_id: quotaId,
+            quota_number: cancellationData.quotaNumber,
+            product_id: product.id,
+            product_name: product.name,
+            owner_id: quotaData.owner_id || '',
+            owner_name: quotaData.owner_name || '',
+            amount: retentionValue,
+            status: 'retention',
+            reason: `Retenção administrativa: ${cancellationReason}`,
+            paid_at: now,
+            due_date: now.split('T')[0],
+            createdAt: serverTimestamp()
+          });
+        }
+
+        // 4. Ownership History Entry (End of current)
+        const previousOwnerLogRef = doc(collection(db, 'tenants', tenantId, 'quotas', quotaId, 'ownership_history'));
+        transaction.set(previousOwnerLogRef, {
+          user_id: quotaData.owner_id || '',
+          user_name: quotaData.owner_name || '',
+          joined_at: quotaData.sold_at || now,
+          left_at: now,
+          exit_type: 'cancellation',
+          financial: {
+            total_paid: totalPaid,
+            retention_value: retentionValue,
+            refund_value: manualRefundValue
+          }
+        });
+
+        // 5. Create Cancellation Audit
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        transaction.set(auditRef, {
+          user_id: user?.id || 'Sistema',
+          user_name: user?.name || 'Sistema',
+          action: 'CANCELAR_PARTICIPACAO',
+          details: `Cancelamento da cota #${cancellationData.quotaNumber} do produto ${product.name}. Motivo: ${cancellationReason}`,
+          financial: {
+            total_paid: totalPaid,
+            retention_value: retentionValue,
+            refund_value: manualRefundValue,
+            refund_proof_url: cancellationProofUrl || ''
+          },
+          quota_id: quotaId,
+          previous_owner_id: quotaData.owner_id || '',
+          previous_owner_name: quotaData.owner_name || '',
+          created_at: serverTimestamp()
+        });
+
+        // Update product counts
+        const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+        transaction.update(productRef, {
+          sold_quotas: increment(-1),
+          available_quotas: increment(1)
+        });
       });
 
-      // 5. Create Cancellation Audit
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      batch.set(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'CANCELAR_PARTICIPACAO',
-        details: `Cancelamento da cota #${cancellationData.quotaNumber} do produto ${product.name}. Motivo: ${cancellationReason}`,
-        financial: {
-          total_paid: totalPaid,
-          retention_value: retentionValue,
-          refund_value: manualRefundValue,
-          refund_proof_url: cancellationProofUrl || ''
-        },
-        quota_id: quotaId,
-        previous_owner_id: quota?.owner_id || '',
-        previous_owner_name: quota?.owner_name || '',
-        created_at: serverTimestamp()
-      });
-
-      // Update product counts
-      const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
-      batch.update(productRef, {
-        sold_quotas: increment(-1),
-        available_quotas: increment(1)
-      });
-
-      await batch.commit();
       alert('Participação cancelada com sucesso!');
       setShowCancellationModal(null);
       setCancellationData(null);
       setCancellationReason('');
       setCancellationProofUrl('');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao processar cancelamento');
+      alert('Erro ao processar cancelamento: ' + err.message);
     } finally {
       setIsProcessingCancellation(false);
     }
@@ -704,67 +718,77 @@ export default function ProductDetailPage() {
     
     setIsProcessingCancellation(true);
     try {
-      const batch = writeBatch(db);
       const now = new Date().toISOString();
-      const quota = quotas.find(q => q.id === cancellationData.quotaId);
 
-      // Create Refund Record
-      const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-      batch.set(refundRef, {
-        quota_id: cancellationData.quotaId,
-        quota_number: cancellationData.quotaNumber,
-        product_id: product.id,
-        product_name: product.name,
-        owner_id: quota?.owner_id || '',
-        owner_name: quota?.owner_name || '',
-        amount: -manualRefundValue,
-        status: 'refund',
-        reason: standaloneRefundReason,
-        proof_url: cancellationProofUrl || '',
-        paid_at: now,
-        due_date: now.split('T')[0],
-        createdAt: serverTimestamp()
-      });
+      await runTransaction(db, async (transaction) => {
+        const quotaRef = doc(db, 'tenants', tenantId, 'quotas', cancellationData.quotaId);
+        const quotaSnap = await transaction.get(quotaRef);
+        if (!quotaSnap.exists()) {
+          throw new Error('Cota não encontrada.');
+        }
 
-      // Create Retention if applicable
-      const calculatedRetained = cancellationData.totalPaid - manualRefundValue;
-      if (calculatedRetained > 0) {
-        const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-        batch.set(retentionRef, {
+        const quotaData = quotaSnap.data();
+
+        // Create Refund Record
+        const refundRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        transaction.set(refundRef, {
           quota_id: cancellationData.quotaId,
           quota_number: cancellationData.quotaNumber,
           product_id: product.id,
           product_name: product.name,
-          owner_id: quota?.owner_id || '',
-          owner_name: quota?.owner_name || '',
-          amount: calculatedRetained,
-          status: 'retention',
-          reason: `Retenção vinculada ao estorno: ${standaloneRefundReason}`,
+          owner_id: quotaData.owner_id || '',
+          owner_name: quotaData.owner_name || '',
+          amount: -manualRefundValue,
+          status: 'refund',
+          reason: standaloneRefundReason,
+          proof_url: cancellationProofUrl || '',
           paid_at: now,
           due_date: now.split('T')[0],
           createdAt: serverTimestamp()
         });
-      }
 
-      // Audit Log
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      batch.set(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'ESTORNO_MANUAL',
-        details: `Estorno de ${manualRefundValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrado para ${quota?.owner_name} (Cota #${cancellationData.quotaNumber}).`,
-        quota_id: cancellationData.quotaId,
-        created_at: serverTimestamp()
+        // Create Retention if applicable using cent-based math to guard against float discrepancies
+        const totalPaidCents = Math.round(cancellationData.totalPaid * 100);
+        const manualRefundCents = Math.round(manualRefundValue * 100);
+        const calculatedRetainedCents = Math.max(0, totalPaidCents - manualRefundCents);
+        const calculatedRetained = calculatedRetainedCents / 100;
+        if (calculatedRetained > 0) {
+          const retentionRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+          transaction.set(retentionRef, {
+            quota_id: cancellationData.quotaId,
+            quota_number: cancellationData.quotaNumber,
+            product_id: product.id,
+            product_name: product.name,
+            owner_id: quotaData.owner_id || '',
+            owner_name: quotaData.owner_name || '',
+            amount: calculatedRetained,
+            status: 'retention',
+            reason: `Retenção vinculada ao estorno: ${standaloneRefundReason}`,
+            paid_at: now,
+            due_date: now.split('T')[0],
+            createdAt: serverTimestamp()
+          });
+        }
+
+        // Audit Log
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        transaction.set(auditRef, {
+          user_id: user?.id || 'Sistema',
+          user_name: user?.name || 'Sistema',
+          action: 'ESTORNO_MANUAL',
+          details: `Estorno de ${manualRefundValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrado para ${quotaData.owner_name} (Cota #${cancellationData.quotaNumber}).`,
+          quota_id: cancellationData.quotaId,
+          created_at: serverTimestamp()
+        });
       });
 
-      await batch.commit();
       alert('Estorno registrado com sucesso!');
       setShowStandaloneRefundModal(null);
       setCancellationData(null);
       setStandaloneRefundReason('');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao registrar estorno');
+      alert('Erro ao registrar estorno: ' + err.message);
     } finally {
       setIsProcessingCancellation(false);
     }
@@ -980,23 +1004,28 @@ export default function ProductDetailPage() {
       const now = new Date();
       const termVer = activeTermObj && typeof activeTermObj.version === 'number' ? activeTermObj.version : 1.0;
       const termH = await computeHash(termContent);
-      
-      const batchSize = 25; // Safer size considering installments
-      const numBatches = Math.ceil(selectedQuotas.length / batchSize);
 
-      for (let b = 0; b < numBatches; b++) {
-        const batch = writeBatch(db);
-        const start = b * batchSize;
-        const end = Math.min((b + 1) * batchSize, selectedQuotas.length);
-        const currentBatchQuotas = selectedQuotas.slice(start, end);
-
-        for (const qId of currentBatchQuotas) {
-          const quota = quotas.find(q => q.id === qId);
-          if (!quota || (quota.status !== 'available' && quota.status !== 'reserved')) continue;
-
-          // Update quota
+      await runTransaction(db, async (transaction) => {
+        const validatedQuotas = [];
+        for (const qId of selectedQuotas) {
           const quotaRef = doc(db, 'tenants', tenantId, 'quotas', qId);
-          batch.update(quotaRef, {
+          const snap = await transaction.get(quotaRef);
+          if (!snap.exists()) {
+            throw new Error(`A cota de ID ${qId} não existe.`);
+          }
+          const quotaData = snap.data();
+          if (quotaData.status !== 'available' && quotaData.status !== 'reserved') {
+            throw new Error(`A cota #${quotaData.number || qId} já não está mais disponível.`);
+          }
+          if (quotaData.status === 'reserved' && quotaData.reserved_by && quotaData.reserved_by !== user.id) {
+            throw new Error(`A cota #${quotaData.number || qId} está reservada por outro participante.`);
+          }
+          validatedQuotas.push({ id: qId, ref: quotaRef, data: quotaData });
+        }
+
+        for (const vq of validatedQuotas) {
+          // Update quota details atomically
+          transaction.update(vq.ref, {
             owner_id: user.id,
             owner_name: user.name,
             owner_cpf: user.cpf || '',
@@ -1009,12 +1038,12 @@ export default function ProductDetailPage() {
           });
 
           // Check fraction parent status update
-          if (quota.parent_id) {
-            const siblings = quotas.filter(q => q.parent_id === quota.parent_id && q.id !== quota.id);
-            const allSiblingsSold = siblings.every(s => s.status === 'sold' || currentBatchQuotas.includes(s.id));
+          if (vq.data.parent_id) {
+            const siblings = quotas.filter(q => q.parent_id === vq.data.parent_id && q.id !== vq.id);
+            const allSiblingsSold = siblings.every(s => s.status === 'sold' || selectedQuotas.includes(s.id));
             if (allSiblingsSold) {
-              const baseQuotaRef = doc(db, 'tenants', tenantId, 'quotas', quota.parent_id);
-              batch.update(baseQuotaRef, {
+              const baseQuotaRef = doc(db, 'tenants', tenantId, 'quotas', vq.data.parent_id);
+              transaction.update(baseQuotaRef, {
                 status: 'sold',
                 sold_at: now.toISOString()
               });
@@ -1022,8 +1051,8 @@ export default function ProductDetailPage() {
           }
 
           // Ownership History Entry (New)
-          const historyEntryRef = doc(collection(db, 'tenants', tenantId, 'quotas', qId, 'ownership_history'));
-          batch.set(historyEntryRef, {
+          const historyEntryRef = doc(collection(db, 'tenants', tenantId, 'quotas', vq.id, 'ownership_history'));
+          transaction.set(historyEntryRef, {
             user_id: user.id,
             user_name: user.name,
             joined_at: now.toISOString()
@@ -1033,22 +1062,30 @@ export default function ProductDetailPage() {
           const dates = getInstallmentDates(installmentCount);
           if (dates.length === 0) throw new Error('Não foi possível gerar o cronograma de parcelas.');
           
-          const amountPerInstallment = product.payment_type === 'recurrent' ? quota.price : quota.price / dates.length;
+          const quotaPriceCents = Math.round((vq.data.price || 0) * 100);
+          const baseInstallmentCents = product.payment_type === 'recurrent' 
+            ? quotaPriceCents 
+            : Math.floor(quotaPriceCents / dates.length);
+          const remainderCents = product.payment_type === 'recurrent' 
+            ? 0 
+            : quotaPriceCents % dates.length;
           
           for (let i = 0; i < dates.length; i++) {
             const dueDate = dates[i];
+            const installmentAmountCents = baseInstallmentCents + (i < remainderCents ? 1 : 0);
+            const actualInstallmentAmount = installmentAmountCents / 100;
 
             const installmentRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-            batch.set(installmentRef, {
-              quota_id: qId,
-              quota_number: quota.number || '',
+            transaction.set(installmentRef, {
+              quota_id: vq.id,
+              quota_number: vq.data.number || '',
               product_id: product.id,
               product_name: product.name,
               owner_id: user.id,
               owner_name: user.name,
               owner_cpf: user.cpf || '',
-              amount: amountPerInstallment,
-              total_quota_price: quota.price,
+              amount: actualInstallmentAmount,
+              total_quota_price: vq.data.price,
               expiration_date: product.expiration_month,
               due_date: dueDate.toISOString().split('T')[0],
               status: 'pending',
@@ -1057,59 +1094,55 @@ export default function ProductDetailPage() {
           }
         }
 
-        // Update product counts (only in the first batch)
-        if (b === 0) {
-          const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
-          batch.update(productRef, {
-            sold_quotas: increment(selectedQuotas.length),
-            available_quotas: increment(-selectedQuotas.length)
-          });
+        // Update product counts
+        const productRef = doc(db, 'tenants', tenantId, 'products', product.id);
+        transaction.update(productRef, {
+          sold_quotas: increment(selectedQuotas.length),
+          available_quotas: increment(-selectedQuotas.length)
+        });
 
-          // Update user signed term status
-          const userRef = doc(db, 'tenants', tenantId, 'users', user.id);
-          const signedAt = now.toISOString();
-          batch.update(userRef, {
-            signed_term_at: signedAt
-          });
+        // Update user signed term status
+        const userRef = doc(db, 'tenants', tenantId, 'users', user.id);
+        const signedAt = now.toISOString();
+        transaction.update(userRef, {
+          signed_term_at: signedAt
+        });
 
-          // Create signature record
-          const signatureRef = doc(collection(db, 'tenants', tenantId, 'signatures'));
-          batch.set(signatureRef, {
-            user_id: user.id,
-            user_name: user.name,
-            user_cpf: user.cpf || '',
-            product_id: product.id,
-            product_name: product.name,
-            quotas: selectedQuotas.map(id => quotas.find(q => q.id === id)?.number || id),
-            payment_type: product.payment_type,
-            installment_count: installmentCount,
-            total_value: quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0),
-            signed_at: now.toISOString(),
-            term_content: termContent,
-            term_version: termVer,
-            term_hash: termH,
-            ip_device_info: navigator.userAgent,
-            createdAt: serverTimestamp()
-          });
+        // Create signature record
+        const signatureRef = doc(collection(db, 'tenants', tenantId, 'signatures'));
+        transaction.set(signatureRef, {
+          user_id: user.id,
+          user_name: user.name,
+          user_cpf: user.cpf || '',
+          product_id: product.id,
+          product_name: product.name,
+          quotas: selectedQuotas.map(id => quotas.find(q => q.id === id)?.number || id),
+          payment_type: product.payment_type,
+          installment_count: installmentCount,
+          total_value: quotas.filter(q => selectedQuotas.includes(q.id)).reduce((sum, q) => sum + q.price, 0),
+          signed_at: now.toISOString(),
+          term_content: termContent,
+          term_version: termVer,
+          term_hash: termH,
+          ip_device_info: navigator.userAgent,
+          createdAt: serverTimestamp()
+        });
 
-          // Log audit
-          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-          batch.set(auditRef, {
-            user_id: user.id,
-            user_name: user.name,
-            action: 'COMPRA_COTA',
-            details: `Comprou ${selectedQuotas.length} cotas do produto ${product.name}`,
-            created_at: serverTimestamp()
-          });
-        }
-
-        await batch.commit();
-      }
+        // Log audit
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        transaction.set(auditRef, {
+          user_id: user.id,
+          user_name: user.name,
+          action: 'COMPRA_COTA',
+          details: `Comprou ${selectedQuotas.length} cotas do produto ${product.name}`,
+          created_at: serverTimestamp()
+        });
+      });
 
       setPurchaseSuccess(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao processar compra no Firebase');
+      alert('Erro ao processar compra: ' + err.message);
     } finally {
       setIsPurchasing(false);
     }
@@ -1316,67 +1349,121 @@ export default function ProductDetailPage() {
 
         const selectedQuotasData = selectedQuotas.map(qId => quotas.find(q => q.id === qId)).filter(Boolean);
         const totalValue = selectedQuotasData.reduce((acc, q) => acc + (q?.price || 0), 0);
-        const fractionPrice = totalValue / numFractions;
         const masterId = selectedQuotas[0];
 
-        // Create fractions
-        for (let i = 1; i <= numFractions; i++) {
-          const sequentialNum = lastNumber + i;
-          await addDoc(collection(db, 'tenants', tenantId, 'quotas'), {
-            product_id: id,
-            number: `${customName} ${String(sequentialNum).padStart(3, '0')}`,
-            price: fractionPrice,
-            status: 'available',
-            parent_id: masterId,
-            group_parents: selectedQuotas, 
-            createdAt: serverTimestamp()
-          });
-        }
+        // Cent-based integer division to prevent penny-loss accounting errors
+        const totalValueCents = Math.round(totalValue * 100);
+        const baseFractionCents = Math.floor(totalValueCents / numFractions);
+        const remainderCents = totalValueCents % numFractions;
+        const fractionPrice = totalValue / numFractions;
 
-        // Mark parents as grouped
-        for (const qId of selectedQuotas) {
-          await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
-            status: 'grouped',
-            subdivided_into: masterId
+        await runTransaction(db, async (transaction) => {
+          // Double check all parents to guarantee they are still available
+          for (const qId of selectedQuotas) {
+            const quotaRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+            const qSnap = await transaction.get(quotaRef);
+            if (!qSnap.exists()) {
+              throw new Error(`Cota original ID: ${qId} não encontrada.`);
+            }
+            if (qSnap.data().status !== 'available') {
+              throw new Error(`Apenas cotas livres/disponíveis podem ser subdivididas. A cota #${qSnap.data().number} está ocupada.`);
+            }
+          }
+
+          // Create fractions
+          for (let i = 1; i <= numFractions; i++) {
+            const sequentialNum = lastNumber + i;
+            const currentFractionCents = baseFractionCents + (i <= remainderCents ? 1 : 0);
+            const fractionPrice = currentFractionCents / 100;
+
+            const newFractionRef = doc(collection(db, 'tenants', tenantId, 'quotas'));
+            transaction.set(newFractionRef, {
+              product_id: id,
+              number: `${customName} ${String(sequentialNum).padStart(3, '0')}`,
+              price: fractionPrice,
+              status: 'available',
+              parent_id: masterId,
+              group_parents: selectedQuotas, 
+              createdAt: serverTimestamp()
+            });
+          }
+
+          // Mark parents as grouped
+          for (const qId of selectedQuotas) {
+            const quotaRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+            transaction.update(quotaRef, {
+              status: 'grouped',
+              subdivided_into: masterId
+            });
+          }
+
+          // Log to operational audit
+          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+          transaction.set(auditRef, {
+            user_id: user?.id || 'Sistema',
+            user_name: user?.name || 'Sistema',
+            action: 'SUBDIVISAO_COTAS',
+            details: `Subdivisão de ${selectedQuotas.length} cotas originais em ${numFractions} frações de preço individual ${fractionPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`,
+            product_id: product.id,
+            created_at: serverTimestamp()
           });
-        }
+        });
       } else {
-        // Desfazer agrupamento
-        for (const qId of selectedQuotas) {
-          const quota = quotas.find(q => q.id === qId);
-          if (!quota || quota.status !== 'grouped') continue;
+        // Desfazer agrupamento / Reagrupar
+        await runTransaction(db, async (transaction) => {
+          for (const qId of selectedQuotas) {
+            const quota = quotas.find(q => q.id === qId);
+            if (!quota || quota.status !== 'grouped') continue;
 
-          const masterId = quota.subdivided_into || qId;
-          const q = query(collection(db, 'tenants', tenantId, 'quotas'), where('parent_id', '==', masterId));
-          const snapshot = await getDocs(q);
+            const masterId = quota.subdivided_into || qId;
+            const q = query(collection(db, 'tenants', tenantId, 'quotas'), where('parent_id', '==', masterId));
+            const snapshot = await getDocs(q);
 
-          if (!snapshot.empty) {
-            const firstChildData = snapshot.docs[0].data();
-            const groupParents = firstChildData.group_parents || [masterId];
-            
-            for (const pId of groupParents) {
-              await updateDoc(doc(db, 'tenants', tenantId, 'quotas', pId), {
+            if (!snapshot.empty) {
+              const firstChildData = snapshot.docs[0].data();
+              const groupParents = firstChildData.group_parents || [masterId];
+              
+              for (const pId of groupParents) {
+                const parentRef = doc(db, 'tenants', tenantId, 'quotas', pId);
+                const parentSnap = await transaction.get(parentRef);
+                if (parentSnap.exists()) {
+                  transaction.update(parentRef, {
+                    status: 'available',
+                    subdivided_into: deleteField()
+                  });
+                }
+              }
+
+              for (const d of snapshot.docs) {
+                const childRef = doc(db, 'tenants', tenantId, 'quotas', d.id);
+                transaction.delete(childRef);
+              }
+            } else {
+              const itemRef = doc(db, 'tenants', tenantId, 'quotas', qId);
+              transaction.update(itemRef, {
                 status: 'available',
                 subdivided_into: deleteField()
               });
             }
-
-            for (const d of snapshot.docs) {
-              await deleteDoc(d.ref);
-            }
-          } else {
-            await updateDoc(doc(db, 'tenants', tenantId, 'quotas', qId), {
-              status: 'available',
-              subdivided_into: deleteField()
-            });
           }
-        }
+
+          // Audit log
+          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+          transaction.set(auditRef, {
+            user_id: user?.id || 'Sistema',
+            user_name: user?.name || 'Sistema',
+            action: 'DESFAZER_SUBDIVISAO',
+            details: `Desfez subdivisão/reagrupou frações para as cotas ID: ${selectedQuotas.join(', ')}`,
+            product_id: product.id,
+            created_at: serverTimestamp()
+          });
+        });
       }
       setSelectedQuotas([]);
       alert('Operação realizada com sucesso!');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao reorganizar cotas');
+      alert('Erro ao reorganizar cotas: ' + err.message);
     }
   };
 

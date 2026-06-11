@@ -181,8 +181,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const diffMonths = (expDate.getFullYear() - currentYear) * 12 + (expDate.getMonth() - currentMonth);
           const remainingMonths = Math.max(1, diffMonths + 1);
           
-          const remainingBalance = totalQuotaPrice - totalPaid;
-          const newAmount = remainingBalance / remainingMonths;
+          const remainingBalanceCents = Math.round(totalQuotaPrice * 100) - Math.round(totalPaid * 100);
+          const baseNewAmountCents = Math.floor(remainingBalanceCents / remainingMonths);
+          const newAmountRemainderCents = remainingBalanceCents % remainingMonths;
           
           pending.forEach(i => {
             batch.delete(doc(db, 'tenants', tId, 'installments', i.id));
@@ -192,6 +193,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const dueDate = new Date(currentYear, currentMonth + i, expDate.getDate());
             const newRef = doc(collection(db, 'tenants', tId, 'installments'));
             const { id, ...dataToCopy } = firstPending;
+            
+            const currentAmountCents = baseNewAmountCents + (i < newAmountRemainderCents ? 1 : 0);
+            const newAmount = currentAmountCents / 100;
+            
             batch.set(newRef, {
               ...dataToCopy,
               amount: newAmount,

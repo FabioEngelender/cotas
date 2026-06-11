@@ -228,9 +228,9 @@ function AppContent() {
           <Route path="/" element={!tenantId ? <TenantSelectionPage /> : (user ? <Navigate to="/dashboard" /> : <Navigate to="/login" />)} />
           <Route path="/login" element={tenantId ? (!user ? <LoginPage /> : <Navigate to="/" />) : <Navigate to="/" />} />
           <Route path="/register" element={tenantId ? (!user ? <Register /> : <Navigate to="/" />) : <Navigate to="/" />} />
-          <Route path="/register-manager/:inviteTenantId" element={<RegisterManager />} />
+          <Route path="/register-manager/:inviteTenantId/:inviteToken" element={<RegisterManager />} />
           <Route path="/register-tenant" element={<RegisterTenant />} />
-          <Route path="/register-client/:inviteTenantId" element={<RegisterClient />} />
+          <Route path="/register-client/:inviteTenantId/:inviteToken" element={<RegisterClient />} />
           <Route 
             path="/*" 
             element={user ? <AuthenticatedApp settings={settings} /> : <Navigate to="/" />} 

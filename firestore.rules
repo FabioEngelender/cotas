@@ -2,12 +2,12 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Global Safety Net
+    // Global Safety Net - Default Deny-All
     match /{document=**} {
       allow read, write: if false;
     }
     
-    // Helpers
+    // Global Security Helper Functions
     function isSignedIn() {
       return request.auth != null;
     }
@@ -38,84 +38,122 @@ service cloud.firestore {
 
     // Match rules for Tenants
     match /tenants/{tenantId} {
-      allow read: if true;
-      allow create: if true;
-      allow update: if true;
+      allow get: if isSignedIn();
+      allow list: if false; // Prevention of brute-force directory sweeps
+      allow create: if isSignedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow update: if isAdmin(tenantId);
+      allow delete: if false;
       
-      // Settings
+      // Tenant-specific business configurations
       match /settings/{settingKey} {
-        allow read: if true;
-        allow write: if isSignedIn();
-      }
-      
-      // Users
-      match /users/{userId} {
-        allow read: if true;
-        allow create: if true;
-        allow update: if isSignedIn();
-        allow delete: if isSignedIn();
-      }
-      
-      // Products
-      match /products/{productId} {
         allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
-        allow update: if isAuthUserOfTenant(tenantId);
-        allow delete: if isAuthUserOfTenant(tenantId);
+        allow write: if isAdmin(tenantId);
+      }
+      
+      // Tenant User Identities & PII Boundaries (Zero PII leaks)
+      match /users/{userId} {
+        allow read: if request.auth.uid == userId || isAdmin(tenantId) || isManager(tenantId);
+        allow create: if (
+          request.auth.uid == userId && (
+            request.resource.data.role == 'client' || 
+            request.resource.data.role == 'manager' || 
+            (request.resource.data.role == 'admin' && get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid)
+          )
+        ) || isAdmin(tenantId);
+        allow update: if (
+          request.auth.uid == userId && 
+          request.resource.data.role == resource.data.role && 
+          request.resource.data.email == resource.data.email &&
+          request.resource.data.tenant_id == resource.data.tenant_id
+        ) || isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId);
+      }
+      
+      // Products catalog rules
+      match /products/{productId} {
+        allow read: if isAuthUserOfTenant(tenantId) && (isAdmin(tenantId) || isManager(tenantId) || resource.data.status != 'draft');
+        allow create: if isAdmin(tenantId);
+        allow update: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId);
         
-        // Product Chat Subcollection
+        // Product Chat Subcollection (Strictly isolated by tenant + product)
         match /chat/{messageId} {
           allow read: if isAuthUserOfTenant(tenantId);
           allow create: if isAuthUserOfTenant(tenantId) && request.resource.data.user_id == request.auth.uid;
           allow update: if isAuthUserOfTenant(tenantId) && resource.data.user_id == request.auth.uid;
-          allow delete: if isAuthUserOfTenant(tenantId);
+          allow delete: if isAdmin(tenantId);
         }
       }
       
-      // Quotas
+      // Fractional Quotas allocation rules
       match /quotas/{quotaId} {
-        allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
-        allow update: if isAuthUserOfTenant(tenantId);
-        allow delete: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && (resource.data.status == 'available' || resource.data.owner_id == request.auth.uid));
+        allow create: if isAdmin(tenantId);
+        allow update: if isAdmin(tenantId) || (
+          isClient(tenantId) && (
+            // Guard 1: Client/Customer reserves a quota for themselves
+            (resource.data.status == 'available' && request.resource.data.status == 'reserved' && request.resource.data.reserved_by == request.auth.uid) ||
+            // Guard 2: Client/Customer buys directly
+            (resource.data.status == 'available' && request.resource.data.status == 'sold' && request.resource.data.owner_id == request.auth.uid) ||
+            // Guard 3: Client/Customer buys their reserved quota
+            (resource.data.status == 'reserved' && resource.data.reserved_by == request.auth.uid && request.resource.data.status == 'sold' && request.resource.data.owner_id == request.auth.uid)
+          )
+        );
+        allow delete: if isAdmin(tenantId);
         
+        // Cohort History
         match /ownership_history/{historyId} {
-          allow read: if isAuthUserOfTenant(tenantId);
-          allow create, update, delete: if isAuthUserOfTenant(tenantId);
+          allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && get(/databases/$(database)/documents/tenants/$(tenantId)/quotas/$(quotaId)).data.owner_id == request.auth.uid);
+          allow create, update, delete: if isAdmin(tenantId);
         }
       }
       
-      // Installments
+      // Ledger / Installments allocation (Financial Gatekeepers)
       match /installments/{installmentId} {
-        allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
-        allow update: if isAuthUserOfTenant(tenantId);
-        allow delete: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && resource.data.owner_id == request.auth.uid);
+        allow create: if isAdmin(tenantId) || (isClient(tenantId) && request.resource.data.owner_id == request.auth.uid);
+        // Only Admin can record refunds or cancellations. Managers are restricted to manual checkouts (status: paid).
+        allow update: if isAdmin(tenantId) || (
+          isManager(tenantId) && 
+          request.resource.data.status != 'refund' && 
+          request.resource.data.status != 'cancelled'
+        );
+        allow delete: if isAdmin(tenantId);
       }
       
-      // Audit Logs
+      // Operational Action logs (System actions are Append-only)
       match /audit_logs/{logId} {
-        allow read: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId);
         allow create: if isAuthUserOfTenant(tenantId);
-        allow update, delete: if false;
+        allow update, delete: if false; // Log entries are completely immutable
       }
       
-      // Legal terms
+      // Regulatory term agreements and digital contracts
       match /terms/{termId} {
-        allow read: if true;
-        allow write: if isAuthUserOfTenant(tenantId);
+        allow read: if isAuthUserOfTenant(tenantId);
+        allow write: if isAdmin(tenantId);
       }
       
-      // Signatures & snapshots of closed products
+      // Immutable Signatures
       match /signatures/{signatureId} {
-        allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && resource.data.user_id == request.auth.uid);
+        allow create: if isAdmin(tenantId) || (isClient(tenantId) && request.resource.data.user_id == request.auth.uid);
         allow update, delete: if false;
       }
+      
+      // Internal system snapshots for pool conclusions
       match /closing_snapshots/{snapshotId} {
-        allow read: if isAuthUserOfTenant(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId) || isManager(tenantId);
+        allow create: if isAdmin(tenantId) || isManager(tenantId);
         allow update, delete: if false;
+      }
+      
+      // Secure Invitation Tokens (Used for single-redeem registrations)
+      match /invites/{inviteId} {
+        allow read: if isSignedIn();
+        allow create: if isAdmin(tenantId);
+        allow update: if isSignedIn() && (isAdmin(tenantId) || (request.resource.data.used_by == request.auth.uid && request.resource.data.used_at != null));
+        allow delete: if isAdmin(tenantId);
       }
     }
   }

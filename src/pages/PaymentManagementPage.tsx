@@ -83,65 +83,71 @@ export default function PaymentManagementPage() {
     if (!tenantId || !showRefundModal || !refundReason.trim()) return;
     
     try {
-      const originalDoc = await getDoc(doc(db, 'tenants', tenantId, 'installments', showRefundModal));
-      if (!originalDoc.exists()) return;
-      
-      const originalData = originalDoc.data();
-      const batch = writeBatch(db);
       const now = new Date().toISOString();
 
-      // 1. Create Negative Reversal Entry (Linked to original)
-      const reversalRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-      const reversalData = {
-        ...originalData,
-        amount: -originalData.amount,
-        status: 'refund',
-        original_payment_id: showRefundModal,
-        refund_reason: refundReason,
-        refunded_by: user.id,
-        refunded_at: now,
-        is_paid: false,
-        createdAt: serverTimestamp()
-      };
-      // Delete ID if it leaked from original spread
-      delete (reversalData as any).id;
-      batch.set(reversalRef, reversalData);
+      await runTransaction(db, async (transaction) => {
+        const originalRef = doc(db, 'tenants', tenantId, 'installments', showRefundModal);
+        const originalDoc = await transaction.get(originalRef);
+        if (!originalDoc.exists()) {
+          throw new Error('Pagamento original não encontrado.');
+        }
+        
+        const originalData = originalDoc.data();
+        if (originalData.status === 'refund') {
+          throw new Error('Pagamento já estornado anteriormente.');
+        }
 
-      // 2. Re-open the debt (Create a new pending installment)
-      const newPendingRef = doc(collection(db, 'tenants', tenantId, 'installments'));
-      const newPendingData = {
-        ...originalData,
-        status: 'pending',
-        paid_at: deleteField(),
-        createdAt: serverTimestamp(),
-        id: deleteField()
-      };
-      batch.set(newPendingRef, newPendingData);
+        // 1. Create Negative Reversal Entry (Linked to original)
+        const reversalRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        const reversalData = {
+          ...originalData,
+          amount: -originalData.amount,
+          status: 'refund',
+          original_payment_id: showRefundModal,
+          refund_reason: refundReason,
+          refunded_by: user.id,
+          refunded_at: now,
+          is_paid: false,
+          createdAt: serverTimestamp()
+        };
+        // Delete ID if it leaked from original spread
+        delete (reversalData as any).id;
+        transaction.set(reversalRef, reversalData);
 
-      // 3. Mark the quota as not fully paid
-      if (originalData.quota_id) {
-        const qRef = doc(db, 'tenants', tenantId, 'quotas', originalData.quota_id);
-        batch.update(qRef, { is_paid: false });
-      }
+        // 2. Re-open the debt (Create a new pending installment)
+        const newPendingRef = doc(collection(db, 'tenants', tenantId, 'installments'));
+        const newPendingData = {
+          ...originalData,
+          status: 'pending',
+          paid_at: deleteField(),
+          createdAt: serverTimestamp(),
+          id: deleteField()
+        };
+        transaction.set(newPendingRef, newPendingData);
 
-      // 4. Audit Log
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      batch.set(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'ESTORNAR_PAGAMENTO',
-        details: `Estornou pagamento ID: ${showRefundModal}. Motivo: ${refundReason}`,
-        created_at: serverTimestamp()
+        // 3. Mark the quota as not fully paid
+        if (originalData.quota_id) {
+          const qRef = doc(db, 'tenants', tenantId, 'quotas', originalData.quota_id);
+          transaction.update(qRef, { is_paid: false });
+        }
+
+        // 4. Audit Log
+        const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+        transaction.set(auditRef, {
+          user_id: user?.id || 'Sistema',
+          user_name: user?.name || 'Sistema',
+          action: 'ESTORNAR_PAGAMENTO',
+          details: `Estornou pagamento ID: ${showRefundModal}. Motivo: ${refundReason}`,
+          created_at: serverTimestamp()
+        });
       });
-
-      await batch.commit();
       
       alert('Estorno realizado com sucesso! O histórico foi preservado e o débito foi reaberto.');
       setShowRefundModal(null);
       setRefundReason('');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('Erro ao realizar estorno.');
+      alert('Erro ao realizar estorno: ' + err.message);
     }
   };
 

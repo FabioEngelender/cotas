@@ -301,6 +301,41 @@ export default function ClientsListPage() {
     }
   };
 
+  const [isGeneratingInvite, setIsGeneratingInvite] = useState(false);
+
+  const handleGenerateSecureClientInvite = async () => {
+    if (!tenantId) return;
+    setIsGeneratingInvite(true);
+    try {
+      const invitesRef = collection(db, 'tenants', tenantId, 'invites');
+      const inviteDoc = doc(invitesRef);
+      const inviteId = inviteDoc.id;
+
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+
+      await setDoc(inviteDoc, {
+        id: inviteId,
+        tenant_id: tenantId,
+        role: 'client',
+        expires_at: expiresAt.toISOString(),
+        used_at: null,
+        used_by: null,
+        created_at: serverTimestamp(),
+        created_by: user?.id || 'Sistema'
+      });
+
+      const inviteLink = `${window.location.origin}/register-client/${tenantId}/${inviteId}`;
+      await navigator.clipboard.writeText(inviteLink);
+      alert('Convite de investidor de uso único (válido por 7 dias) gerado e copiado para a área de transferência!');
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao gerar convite seguro.');
+    } finally {
+      setIsGeneratingInvite(false);
+    }
+  };
+
   const sortedClients = [...clients].sort((a, b) => {
     // Prioritize overdue payments
     const aOverdue = a.has_overdue_payments || overdueUserIds.has(a.id);
@@ -325,14 +360,11 @@ export default function ClientsListPage() {
         </header>
         <div className="flex gap-3">
           <button 
-            onClick={() => {
-              const link = `${window.location.origin}/register-client/${tenantId || user.tenant_id}`;
-              navigator.clipboard.writeText(link);
-              alert('Link de cadastro de cliente copiado!');
-            }}
-            className="flex items-center gap-2 px-6 py-3 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 transition-all text-sm cursor-pointer"
+            disabled={isGeneratingInvite}
+            onClick={handleGenerateSecureClientInvite}
+            className="flex items-center gap-2 px-6 py-3 bg-black/5 text-black rounded-2xl font-bold hover:bg-black/10 hover:scale-[1.02] active:scale-[0.98] transition-all text-sm cursor-pointer border-none"
           >
-            <Share size={18} /> Copiar Link Cliente
+            <Share size={18} /> {isGeneratingInvite ? 'Gerando...' : 'Gerar Convite de Cliente'}
           </button>
         </div>
       </div>
