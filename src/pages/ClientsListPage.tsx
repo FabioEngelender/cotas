@@ -27,10 +27,8 @@ import { Role, User } from '../types.js';
 export default function ClientsListPage() {
   const [clients, setClients] = useState<User[]>([]);
   const [overdueUserIds, setOverdueUserIds] = useState<Set<string>>(new Set());
-  const [showCreate, setShowCreate] = useState(false);
   const [selectedUserDetails, setSelectedUserDetails] = useState<any>(null);
   const [termContent, setTermContent] = useState('');
-  const [newUser, setNewUser] = useState({ name: '', email: '', role: 'client' as Role, cpf: '', pix_key: '', phone: '', address: '' });
   const { user, tenantId, syncUserInstallments } = useContext(AuthContext)!;
 
   const fetchUsers = () => {
@@ -254,98 +252,7 @@ export default function ClientsListPage() {
     }
   };
 
-  const handleCreateUser = async () => {
-    if (!tenantId) return;
-    if (!newUser.name || !newUser.email) {
-      alert('Nome e e-mail são obrigatórios.');
-      return;
-    }
 
-    if (newUser.cpf) {
-      if (!validateCPF(newUser.cpf)) {
-        alert('CPF inválido. Por favor, verifique os dígitos verificadores.');
-        return;
-      }
-    }
-
-    try {
-      const usersRef = collection(db, 'tenants', tenantId, 'users');
-      
-      // Check if CPF is already used
-      if (newUser.cpf) {
-        const cleanCPF = newUser.cpf.replace(/\D/g, '');
-        const formattedCPF = maskCPF(cleanCPF);
-        const cpfQuery = query(usersRef, where('cpf', '==', formattedCPF));
-        const cpfSnap = await getDocs(cpfQuery);
-        
-        if (!cpfSnap.empty) {
-          // Reutilizar cadastro existente, permitindo apenas atualização dos dados
-          const existingUserDoc = cpfSnap.docs[0];
-          const existingData = existingUserDoc.data();
-          
-          await updateDoc(doc(db, 'tenants', tenantId, 'users', existingUserDoc.id), {
-            name: newUser.name,
-            phone: newUser.phone || existingData.phone || '',
-            address: newUser.address || existingData.address || '',
-            pix_key: newUser.pix_key || existingData.pix_key || '',
-            role: newUser.role || existingData.role || 'client'
-          });
-
-          // Log audit
-          const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-          await setDoc(auditRef, {
-            user_id: user?.id || 'Sistema',
-            user_name: user?.name || 'Sistema',
-            action: 'REUTILIZAR_ATUALIZAR_USUARIO',
-            details: `CPF ${formattedCPF} já cadastrado. Cadastro correspondente de ${existingData.name} foi atualizado e reutilizado.`,
-            created_at: serverTimestamp()
-          });
-
-          alert(`O CPF ${formattedCPF} já estava cadastrado como usuário (${existingData.name}). Os dados adicionais fornecidos foram utilizados para atualizar e reutilizar este cadastro.`);
-          setShowCreate(false);
-          setNewUser({ name: '', email: '', role: 'client', cpf: '', pix_key: '', phone: '', address: '' });
-          return;
-        }
-      }
-
-      // Check if email already existed as a document ID
-      const userRef = doc(db, 'tenants', tenantId, 'users', newUser.email);
-      const userDocSnap = await getDoc(userRef);
-      if (userDocSnap.exists()) {
-        await updateDoc(userRef, {
-          name: newUser.name,
-          role: newUser.role || 'client',
-          cpf: newUser.cpf || userDocSnap.data().cpf || '',
-          pix_key: newUser.pix_key || userDocSnap.data().pix_key || '',
-          phone: newUser.phone || userDocSnap.data().phone || '',
-          address: newUser.address || userDocSnap.data().address || ''
-        });
-        alert('E-mail já cadastrado. O cadastro existente teve as informações mescladas com sucesso.');
-      } else {
-        await setDoc(userRef, {
-          ...newUser,
-          tenant_id: tenantId,
-          created_at: serverTimestamp()
-        });
-      }
-
-      // Log audit
-      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
-      await setDoc(auditRef, {
-        user_id: user?.id || 'Sistema',
-        user_name: user?.name || 'Sistema',
-        action: 'CRIAR_USUARIO',
-        details: `Criou ou mesclou o usuário ${newUser.name} (${newUser.email})`,
-        created_at: serverTimestamp()
-      });
-
-      setShowCreate(false);
-      setNewUser({ name: '', email: '', role: 'client', cpf: '', pix_key: '', phone: '', address: '' });
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao criar usuário no Firebase');
-    }
-  };
 
   const deleteUser = async (id: string) => {
     if (!tenantId) return;
@@ -427,15 +334,6 @@ export default function ClientsListPage() {
           >
             <Share size={18} /> Copiar Link Cliente
           </button>
-          
-          {user.role === 'admin' && (
-            <button 
-              onClick={() => setShowCreate(true)}
-              className="flex items-center gap-2 px-6 py-3 bg-black text-white rounded-2xl font-bold hover:scale-105 transition-all text-sm cursor-pointer"
-            >
-              Criar Usuário Manual
-            </button>
-          )}
         </div>
       </div>
 
@@ -611,93 +509,6 @@ export default function ClientsListPage() {
         )}
       </AnimatePresence>
 
-      {/* Create User Modal */}
-      <AnimatePresence>
-        {showCreate && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6">
-            <motion.div 
-               initial={{ opacity: 0 }}
-               animate={{ opacity: 1 }}
-               exit={{ opacity: 0 }}
-               onClick={() => setShowCreate(false)}
-               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-[95%] sm:w-full max-w-xl bg-white rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh] space-y-4"
-            >
-              <h3 className="text-2xl font-bold">Novo Usuário</h3>
-              <div className="space-y-4">
-                <input 
-                  className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                  placeholder="Nome Completo *" 
-                  value={newUser.name}
-                  onChange={e => setNewUser({...newUser, name: e.target.value})}
-                />
-                <input 
-                  className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                  placeholder="E-mail *" 
-                  type="email"
-                  value={newUser.email}
-                  onChange={e => setNewUser({...newUser, email: e.target.value})}
-                />
-                <div className="grid grid-cols-2 gap-4">
-                  <select 
-                    className="w-full p-4 bg-black/5 rounded-2xl text-sm"
-                    value={newUser.role}
-                    onChange={e => setNewUser({...newUser, role: e.target.value as Role})}
-                  >
-                    <option value="client">Cliente</option>
-                    <option value="manager">Gerente</option>
-                    <option value="admin">Administrador</option>
-                  </select>
-                  <input 
-                    className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                    placeholder="CPF (apenas números)" 
-                    value={newUser.cpf}
-                    onChange={e => setNewUser({...newUser, cpf: e.target.value})}
-                  />
-                </div>
-                <input 
-                  className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                  placeholder="Chave Pix" 
-                  value={newUser.pix_key}
-                  onChange={e => setNewUser({...newUser, pix_key: e.target.value})}
-                />
-                <input 
-                  className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                  placeholder="Telefone" 
-                  value={newUser.phone}
-                  onChange={e => setNewUser({...newUser, phone: e.target.value})}
-                />
-                <input 
-                  className="w-full p-4 bg-black/5 rounded-2xl text-sm" 
-                  placeholder="Endereço Completo" 
-                  value={newUser.address}
-                  onChange={e => setNewUser({...newUser, address: e.target.value})}
-                />
-                
-                <div className="flex gap-3 pt-4">
-                  <button 
-                    onClick={() => setShowCreate(false)}
-                    className="w-full py-4 bg-black/5 text-black rounded-2xl font-bold text-sm cursor-pointer"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    onClick={handleCreateUser}
-                    className="w-full py-4 bg-black text-white rounded-2xl font-bold text-sm cursor-pointer"
-                  >
-                    Salvar Usuário
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
