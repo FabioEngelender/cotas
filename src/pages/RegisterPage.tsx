@@ -231,6 +231,7 @@ export function RegisterClient() {
           email: firebaseUser.email,
           role: inviteData.role, // EXCLUSIVELY BIND ROLE
           tenant_id: inviteTenantId,
+          invite_id: inviteToken, // STRICT PROTOCOL SECURITY TO PREVENT ESCALATION
           created_at: serverTimestamp()
         });
 
@@ -857,6 +858,7 @@ export function RegisterManager() {
           email: formData.email,
           role: inviteData.role, // EXCLUSIVELY BIND ROLE
           tenant_id: inviteTenantId,
+          invite_id: inviteToken, // STRICT PROTOCOL SECURITY TO PREVENT ESCALATION
           created_at: serverTimestamp()
         });
 

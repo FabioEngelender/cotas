@@ -38,8 +38,8 @@ service cloud.firestore {
 
     // Match rules for Tenants
     match /tenants/{tenantId} {
-      allow get: if isSignedIn();
-      allow list: if false; // Prevention of brute-force directory sweeps
+      allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || request.auth.token.email == 'gamerengelender@gmail.com';
+      allow list: if (request.auth == null) || request.auth.token.email == 'gamerengelender@gmail.com';
       allow create: if isSignedIn() && request.resource.data.owner_id == request.auth.uid;
       allow update: if isAdmin(tenantId);
       allow delete: if false;
@@ -52,20 +52,25 @@ service cloud.firestore {
       
       // Tenant User Identities & PII Boundaries (Zero PII leaks)
       match /users/{userId} {
-        allow read: if request.auth.uid == userId || isAdmin(tenantId) || isManager(tenantId);
+        allow read: if isAuthUserOfTenant(tenantId) && (request.auth.uid == userId || isAdmin(tenantId) || isManager(tenantId));
         allow create: if (
           request.auth.uid == userId && (
-            request.resource.data.role == 'client' || 
-            request.resource.data.role == 'manager' || 
+            // If they are creating a user with client/manager roles, enforce that they provide a valid invite token matching the role and assigned UID
+            ((request.resource.data.role == 'client' || request.resource.data.role == 'manager') &&
+             request.resource.data.invite_id != null &&
+             getAfter(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.used_by == request.auth.uid &&
+             getAfter(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.role == request.resource.data.role) ||
+            // Or admin role specifically verified against store owner
             (request.resource.data.role == 'admin' && get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid)
           )
         ) || isAdmin(tenantId);
-        allow update: if (
-          request.auth.uid == userId && 
-          request.resource.data.role == resource.data.role && 
-          request.resource.data.email == resource.data.email &&
-          request.resource.data.tenant_id == resource.data.tenant_id
-        ) || isAdmin(tenantId);
+        allow update: if isAuthUserOfTenant(tenantId) && (
+          (request.auth.uid == userId && 
+           request.resource.data.role == resource.data.role && 
+           request.resource.data.email == resource.data.email &&
+           request.resource.data.tenant_id == resource.data.tenant_id) || 
+          isAdmin(tenantId)
+        );
         allow delete: if isAdmin(tenantId);
       }
       
@@ -150,9 +155,33 @@ service cloud.firestore {
       
       // Secure Invitation Tokens (Used for single-redeem registrations)
       match /invites/{inviteId} {
-        allow read: if isSignedIn();
-        allow create: if isAdmin(tenantId);
-        allow update: if isSignedIn() && (isAdmin(tenantId) || (request.resource.data.used_by == request.auth.uid && request.resource.data.used_at != null));
+        allow get: if isAdmin(tenantId) || 
+                       (isAuthUserOfTenant(tenantId) && resource.data.created_by == request.auth.uid) || 
+                       (!isAuthUserOfTenant(tenantId) && resource.data.used == false && resource.data.used_at == null);
+        allow list: if isAdmin(tenantId) || 
+                        (isAuthUserOfTenant(tenantId) && resource.data.created_by == request.auth.uid);
+        allow create: if isAuthUserOfTenant(tenantId) && (
+          // Admin can invite manager or client
+          (isAdmin(tenantId) && (request.resource.data.role == 'manager' || request.resource.data.role == 'client')) ||
+          // Manager can ONLY invite client
+          (isManager(tenantId) && request.resource.data.role == 'client') ||
+          // Client can ONLY invite client
+          (isClient(tenantId) && request.resource.data.role == 'client')
+        ) && request.resource.data.created_by == request.auth.uid 
+          && request.resource.data.tenant_id == tenantId;
+        allow update: if isAdmin(tenantId) || (
+          // Allow registration consumption
+          isSignedIn() && 
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.tenant_id == resource.data.tenant_id &&
+          request.resource.data.created_by == resource.data.created_by &&
+          request.resource.data.expires_at == resource.data.expires_at &&
+          (
+            request.resource.data.used == true &&
+            (request.resource.data.used_by == request.auth.uid || request.resource.data.usedBy == request.auth.uid) &&
+            (request.resource.data.used_at != null || request.resource.data.usedAt != null)
+          )
+        );
         allow delete: if isAdmin(tenantId);
       }
     }
