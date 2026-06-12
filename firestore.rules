@@ -12,34 +12,46 @@ service cloud.firestore {
       return request.auth != null;
     }
     
-    function getUserData(tenantId, userId) {
-      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(userId)).data;
+    function isMasterAdmin() {
+      return isSignedIn() && request.auth.token.email == 'gamerengelender@gmail.com';
     }
 
     function isAuthUserOfTenant(tenantId) {
-      return isSignedIn() && exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid));
+      return isSignedIn() && (
+        isMasterAdmin() ||
+        exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid
+      );
     }
     
     function getUserRole(tenantId) {
-      return getUserData(tenantId, request.auth.uid).role;
+      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data.role;
     }
     
     function isAdmin(tenantId) {
-      return isAuthUserOfTenant(tenantId) && getUserRole(tenantId) == 'admin';
+      return isSignedIn() && (
+        isMasterAdmin() ||
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid ||
+        (exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) && getUserRole(tenantId) == 'admin')
+      );
     }
     
     function isManager(tenantId) {
-      return isAuthUserOfTenant(tenantId) && getUserRole(tenantId) == 'manager';
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) && 
+             getUserRole(tenantId) == 'manager';
     }
     
     function isClient(tenantId) {
-      return isAuthUserOfTenant(tenantId) && getUserRole(tenantId) == 'client';
+      return isSignedIn() && 
+             exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) && 
+             getUserRole(tenantId) == 'client';
     }
 
     // Match rules for Tenants
     match /tenants/{tenantId} {
-      allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || (request.auth != null && request.auth.token.email == 'gamerengelender@gmail.com');
-      allow list: if (resource.data.status == 'active') || (request.auth != null && request.auth.token.email == 'gamerengelender@gmail.com');
+      allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || isMasterAdmin();
+      allow list: if (resource.data.status == 'active') || isMasterAdmin();
       allow create: if isSignedIn() && request.resource.data.owner_id == request.auth.uid;
       allow update: if isAdmin(tenantId);
       allow delete: if false;
@@ -52,7 +64,11 @@ service cloud.firestore {
       
       // Tenant User Identities & PII Boundaries (Zero PII leaks)
       match /users/{userId} {
-        allow read: if isAuthUserOfTenant(tenantId) && (request.auth.uid == userId || isAdmin(tenantId) || isManager(tenantId));
+        allow read: if isSignedIn() && (
+          request.auth.uid == userId || 
+          isMasterAdmin() || 
+          (isAuthUserOfTenant(tenantId) && (isAdmin(tenantId) || isManager(tenantId)))
+        );
         allow create: if (
           request.auth.uid == userId && (
             // If they are creating a user with client/manager roles, enforce that they provide a valid invite token matching the role and assigned UID
