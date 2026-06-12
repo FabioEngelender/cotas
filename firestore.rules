@@ -38,8 +38,8 @@ service cloud.firestore {
 
     // Match rules for Tenants
     match /tenants/{tenantId} {
-      allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || request.auth.token.email == 'gamerengelender@gmail.com';
-      allow list: if (request.auth == null) || request.auth.token.email == 'gamerengelender@gmail.com';
+      allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || (request.auth != null && request.auth.token.email == 'gamerengelender@gmail.com');
+      allow list: if (resource.data.status == 'active') || (request.auth != null && request.auth.token.email == 'gamerengelender@gmail.com');
       allow create: if isSignedIn() && request.resource.data.owner_id == request.auth.uid;
       allow update: if isAdmin(tenantId);
       allow delete: if false;
