@@ -50,6 +50,13 @@ service cloud.firestore {
              getUserRole(tenantId) == 'client';
     }
 
+    // Global Short Links Collection for clean short URLs & QR Codes
+    match /short_links/{code} {
+      allow get: if true;
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn();
+    }
+
     // Match rules for Tenants
     match /tenants/{tenantId} {
       allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || isMasterAdmin();

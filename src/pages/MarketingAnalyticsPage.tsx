@@ -17,7 +17,8 @@ import {
   Loader2,
   Trash2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  QrCode
 } from 'lucide-react';
 import { 
   collection, 
@@ -34,6 +35,8 @@ import {
 import { db, auth, handleFirestoreError, OperationType } from '../firebase.js';
 import { useAuth } from '../contexts/AuthContext.js';
 import { cn } from '../utils/cn.js';
+import { createShortLink } from '../utils/urlShortener.js';
+import { QrCodeModal } from '../components/QrCodeModal.js';
 
 interface MarketingLinkItem {
   id: string;
@@ -47,6 +50,8 @@ interface MarketingLinkItem {
   created_at: any;
   created_by: string;
   invite_link?: string;
+  short_code?: string;
+  short_url?: string;
 }
 
 interface ClientUser {
@@ -89,6 +94,21 @@ export default function MarketingAnalyticsPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // QR Modal State
+  const [qrModalData, setQrModalData] = useState<{
+    isOpen: boolean;
+    title: string;
+    longUrl: string;
+    shortUrl: string;
+    shortCode: string;
+  }>({
+    isOpen: false,
+    title: '',
+    longUrl: '',
+    shortUrl: '',
+    shortCode: ''
+  });
 
   // Form State
   const [name, setName] = useState('');
@@ -178,6 +198,9 @@ export default function MarketingAnalyticsPage() {
 
       const creatorName = user?.name || user?.email || (auth.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Admin');
 
+      // Create short link entry
+      const shortData = await createShortLink(tenantId, linkId, 'client', true, name.trim());
+
       // Create invite record so auth transaction validates it natively
       const inviteRef = doc(db, 'tenants', tenantId, 'invites', linkId);
 
@@ -194,7 +217,9 @@ export default function MarketingAnalyticsPage() {
         used_by: null,
         created_at: serverTimestamp(),
         created_by: currentUid,
-        created_by_name: creatorName
+        created_by_name: creatorName,
+        short_code: shortData.shortCode,
+        short_url: shortData.shortUrl
       });
 
       // Save marketing link record
@@ -208,14 +233,16 @@ export default function MarketingAnalyticsPage() {
         status: 'active',
         created_at: serverTimestamp(),
         created_by: currentUid,
-        created_by_name: creatorName
+        created_by_name: creatorName,
+        short_code: shortData.shortCode,
+        short_url: shortData.shortUrl
       });
 
       // Reset form
       setName('');
       setNotes('');
       setShowCreateModal(false);
-      alert('Link de divulgação criado com sucesso!');
+      alert(`Link de divulgação curto gerado com sucesso!\nURL: ${shortData.shortUrl}`);
     } catch (err: any) {
       console.error("Error creating marketing link:", err);
       handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantId}/marketing_links`);
@@ -225,15 +252,27 @@ export default function MarketingAnalyticsPage() {
     }
   };
 
-  const copyToClipboard = async (linkId: string) => {
-    const fullUrl = `${baseUrl}/register-client/${tenantId}/${linkId}`;
+  const copyToClipboard = async (link: MarketingLinkItem) => {
+    const fullUrl = link.short_url || `${baseUrl}/r/${link.short_code || link.id}` || `${baseUrl}/register-client/${tenantId}/${link.id}`;
     try {
       await navigator.clipboard.writeText(fullUrl);
-      setCopiedId(linkId);
+      setCopiedId(link.id);
       setTimeout(() => setCopiedId(null), 2500);
     } catch (err) {
       console.error("Failed to copy:", err);
     }
+  };
+
+  const openQrCodeModalForLink = (link: MarketingLinkItem) => {
+    const longUrl = `${baseUrl}/register-client/${tenantId}/${link.id}`;
+    const shortUrl = link.short_url || `${baseUrl}/r/${link.short_code || link.id}`;
+    setQrModalData({
+      isOpen: true,
+      title: `QR Code: ${link.name}`,
+      longUrl,
+      shortUrl,
+      shortCode: link.short_code || link.id
+    });
   };
 
   const toggleLinkStatus = async (link: MarketingLinkItem) => {
@@ -420,9 +459,17 @@ export default function MarketingAnalyticsPage() {
                           </div>
 
                           <button
-                            onClick={() => copyToClipboard(link.id)}
+                            onClick={() => openQrCodeModalForLink(link)}
+                            className="p-2.5 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer border-none shadow-sm"
+                            title="Ver QR Code do Link"
+                          >
+                            <QrCode size={14} /> QR Code
+                          </button>
+
+                          <button
+                            onClick={() => copyToClipboard(link)}
                             className="p-2.5 bg-black text-white rounded-xl hover:bg-black/80 transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer border-none"
-                            title="Copiar Link de Cadastro"
+                            title="Copiar Link Curto"
                           >
                             {copiedId === link.id ? (
                               <>
@@ -710,6 +757,16 @@ export default function MarketingAnalyticsPage() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* QR Code Modal */}
+      <QrCodeModal
+        isOpen={qrModalData.isOpen}
+        onClose={() => setQrModalData(prev => ({ ...prev, isOpen: false }))}
+        title={qrModalData.title}
+        longUrl={qrModalData.longUrl}
+        shortUrl={qrModalData.shortUrl}
+        shortCode={qrModalData.shortCode}
+      />
     </div>
   );
 }

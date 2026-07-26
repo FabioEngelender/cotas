@@ -70,6 +70,7 @@ import MyPaymentsPage from './pages/MyPaymentsPage.js';
 import PaymentManagementPage from './pages/PaymentManagementPage.js';
 import SettingsPage from './pages/SettingsPage.js';
 import MarketingAnalyticsPage from './pages/MarketingAnalyticsPage.js';
+import ShortLinkRedirectPage from './pages/ShortLinkRedirectPage.js';
 
 // --- Background Worker Utilities ---
 
@@ -286,6 +287,8 @@ function AppContent() {
           <Route path="/register-manager/:inviteTenantId/:inviteToken" element={<RegisterManager />} />
           <Route path="/register-tenant" element={<RegisterTenant />} />
           <Route path="/register-client/:inviteTenantId/:inviteToken" element={<RegisterClient />} />
+          <Route path="/r/:param1" element={<ShortLinkRedirectPage />} />
+          <Route path="/r/:param1/:param2" element={<ShortLinkRedirectPage />} />
           <Route 
             path="/*" 
             element={user ? <AuthenticatedApp settings={settings} /> : <Navigate to="/" />} 
