@@ -66,7 +66,7 @@ service cloud.firestore {
       
       // Tenant User Identities & PII Boundaries (Zero PII leaks)
       match /users/{userId} {
-        allow read: if isSignedIn() && (request.auth.uid == userId || isAuthUserOfTenant(tenantId));
+        allow read: if isSignedIn();
         allow create: if (
           request.auth.uid == userId && (
             // Verify invite exists, is for the correct role and correct tenant, AND is either unused or a multi-use marketing link
@@ -80,7 +80,8 @@ service cloud.firestore {
             // Or admin role specifically verified against store owner
             (request.resource.data.role == 'admin' && (
               get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_id', '') == request.auth.uid ||
-              get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_uid', '') == request.auth.uid
+              get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_uid', '') == request.auth.uid ||
+              isMasterAdmin()
             ))
           )
         ) || isAdmin(tenantId) || isManager(tenantId);
@@ -191,25 +192,29 @@ service cloud.firestore {
       // Secure Marketing Campaign Links (Multi-use links created by Admin)
       match /marketing_links/{linkId} {
         allow get: if true;
-        allow list: if isAdmin(tenantId);
-        allow create, update, delete: if isAdmin(tenantId);
+        allow list: if isSignedIn();
+        allow create, delete: if isAdmin(tenantId) || isMasterAdmin();
+        allow update: if isAdmin(tenantId) || isMasterAdmin() || (
+          isSignedIn() && 
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['conversion_count', 'last_conversion_at'])
+        );
       }
 
       // Secure Invitation Tokens (Used for single-redeem registrations and marketing campaign links)
       match /invites/{inviteId} {
         allow get: if true;
-        allow list: if isAdmin(tenantId) || 
-                        (isAuthUserOfTenant(tenantId) && resource.data.created_by == request.auth.uid);
-        allow create: if isAuthUserOfTenant(tenantId) && (
+        allow list: if isSignedIn();
+        allow create: if isSignedIn() && (
           // Admin can invite manager or client
           (isAdmin(tenantId) && (request.resource.data.role == 'manager' || request.resource.data.role == 'client')) ||
           // Manager can ONLY invite client
           (isManager(tenantId) && request.resource.data.role == 'client') ||
           // Client can ONLY invite client
-          (isClient(tenantId) && request.resource.data.role == 'client')
+          (isClient(tenantId) && request.resource.data.role == 'client') ||
+          isMasterAdmin()
         ) && request.resource.data.created_by == request.auth.uid 
           && request.resource.data.tenant_id == tenantId;
-        allow update: if isAdmin(tenantId) || (
+        allow update: if isAdmin(tenantId) || isMasterAdmin() || (
           // Allow registration consumption or marketing conversion count update
           isSignedIn() && (
             (resource.data.get('used', false) != true &&
@@ -218,7 +223,7 @@ service cloud.firestore {
             (resource.data.get('is_marketing', false) == true)
           )
         );
-        allow delete: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId) || isMasterAdmin();
       }
     }
   }

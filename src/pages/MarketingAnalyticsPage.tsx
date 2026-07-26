@@ -160,7 +160,7 @@ export default function MarketingAnalyticsPage() {
     if (!name.trim()) return;
     if (!tenantId) return;
 
-    const currentUid = auth.currentUser?.uid || user?.id || user?.uid;
+    const currentUid = auth.currentUser?.uid;
     if (!currentUid) {
       alert('Sessão do usuário não identificada. Por favor, recarregue a página ou faça login novamente.');
       return;
