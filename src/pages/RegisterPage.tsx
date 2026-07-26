@@ -162,6 +162,7 @@ export function RegisterClient() {
 
       // 2. Atomic Transaction for single-use consumption or marketing conversion
       await runTransaction(db, async (transaction) => {
+        // --- ALL READS FIRST ---
         const transactionInviteSnap = await transaction.get(inviteDocRef);
         
         if (!transactionInviteSnap.exists()) {
@@ -192,8 +193,6 @@ export function RegisterClient() {
           throw new Error('Tenant de convite inválido.');
         }
 
-        const now = new Date();
-
         // Check if user already exists in this tenant
         const userRef = doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid);
         const userSnap = await transaction.get(userRef);
@@ -213,6 +212,16 @@ export function RegisterClient() {
           }
         }
 
+        let mktRef = null;
+        let mktSnap = null;
+        if (isMarketing && inviteData.marketing_link_id) {
+          mktRef = doc(db, 'tenants', inviteTenantId, 'marketing_links', inviteData.marketing_link_id);
+          mktSnap = await transaction.get(mktRef);
+        }
+
+        // --- ALL WRITES AFTER ALL READS ARE COMPLETE ---
+        const now = new Date();
+
         if (isMarketing) {
           // Increment conversion count on marketing invite
           const currentCount = inviteData.conversion_count || 0;
@@ -222,15 +231,11 @@ export function RegisterClient() {
           });
 
           // Also update marketing_links collection if available
-          if (inviteData.marketing_link_id) {
-            const mktRef = doc(db, 'tenants', inviteTenantId, 'marketing_links', inviteData.marketing_link_id);
-            const mktSnap = await transaction.get(mktRef);
-            if (mktSnap.exists()) {
-              transaction.update(mktRef, {
-                conversion_count: (mktSnap.data().conversion_count || 0) + 1,
-                last_conversion_at: now.toISOString()
-              });
-            }
+          if (mktRef && mktSnap && mktSnap.exists()) {
+            transaction.update(mktRef, {
+              conversion_count: (mktSnap.data().conversion_count || 0) + 1,
+              last_conversion_at: now.toISOString()
+            });
           }
         } else {
           // Mark single-use invite as consumed
