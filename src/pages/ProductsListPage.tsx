@@ -21,7 +21,9 @@ import {
   ImagePlus, 
   Info, 
   Check, 
-  RefreshCw 
+  RefreshCw,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { db, handleFirestoreError, OperationType } from '../firebase.js';
@@ -49,7 +51,7 @@ export function ProductsListPage() {
 
   const fetchProducts = () => {
     if (!tenantId) return;
-    const q = query(collection(db, 'tenants', tenantId, 'products'), orderBy('created_at', 'desc'));
+    const q = query(collection(db, 'tenants', tenantId, 'products'));
     return onSnapshot(q, (snapshot) => {
       const productsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
       setProducts(productsData);
@@ -123,7 +125,8 @@ export function ProductsListPage() {
         created_at: new Date().toISOString(),
         sold_quotas: 0,
         available_quotas: totalQuotas,
-        status: status
+        status: status,
+        display_order: products.length
       };
 
       const productRef = await addDoc(collection(db, 'tenants', tenantId, 'products'), productData);
@@ -221,6 +224,63 @@ export function ProductsListPage() {
     }
   };
 
+  const sortedProducts = [...products].sort((a, b) => {
+    const orderA = a.display_order ?? 0;
+    const orderB = b.display_order ?? 0;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+    return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+  });
+
+  const displayedProducts = sortedProducts.filter(product => {
+    if (user?.role === 'client') {
+      return product.status === 'active';
+    }
+    return true;
+  });
+
+  const moveProduct = async (e: React.MouseEvent, index: number, direction: 'up' | 'down') => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!tenantId) return;
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= sortedProducts.length) return;
+
+    try {
+      const batch = writeBatch(db);
+      
+      sortedProducts.forEach((prod, idx) => {
+        let newOrder = idx;
+        if (idx === index) {
+          newOrder = targetIndex;
+        } else if (idx === targetIndex) {
+          newOrder = index;
+        }
+        
+        const prodRef = doc(db, 'tenants', tenantId, 'products', prod.id);
+        batch.update(prodRef, {
+          display_order: newOrder
+        });
+      });
+
+      await batch.commit();
+
+      const auditRef = doc(collection(db, 'tenants', tenantId, 'audit_logs'));
+      await setDoc(auditRef, {
+        user_id: user?.id || 'Sistema',
+        user_name: user?.name || 'Sistema',
+        action: 'REORGANIZAR_PRODUTOS',
+        details: `Reorganizou a ordem dos produtos no catálogo`,
+        created_at: serverTimestamp()
+      });
+    } catch (err) {
+      console.error("Erro ao reordenar produtos:", err);
+      alert("Erro ao reordenar produtos");
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -239,33 +299,19 @@ export function ProductsListPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {products.map(product => {
+        {displayedProducts.map((product, index) => {
           const pQuotas = quotas.filter(q => q.product_id === product.id);
-          const parentFractions: { [parentId: string]: number } = {};
-          pQuotas.forEach(q => {
-            if (q.parent_id) {
-              parentFractions[q.parent_id] = (parentFractions[q.parent_id] || 0) + 1;
-            }
-          });
 
-          let availableWeight = 0;
+          let availableCount = 0;
           pQuotas.forEach(q => {
             if (q.status === 'grouped') return;
-            let weight = 1;
-            if (q.parent_id) {
-              const totalFracs = parentFractions[q.parent_id] || 1;
-              weight = 1 / totalFracs;
-            }
             if (q.status === 'available') {
-              availableWeight += weight;
+              availableCount += 1;
             }
           });
 
-          const roundedAvailable = Math.round(availableWeight * 100) / 100;
-          const isEsgotado = roundedAvailable < 0.01;
-          const formattedAvailable = roundedAvailable % 1 === 0 
-            ? Math.round(roundedAvailable).toString() 
-            : roundedAvailable.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+          const isEsgotado = availableCount === 0;
+          const formattedAvailable = availableCount.toString();
           
           return (
             <Link key={product.id} to={`/products/${product.id}`} className="group relative">
@@ -291,12 +337,33 @@ export function ProductsListPage() {
                     {formattedAvailable} Disponíveis
                   </div>
                   {user?.role === 'admin' && (
-                    <button 
-                      onClick={(e) => deleteProduct(e, product.id)}
-                      className="absolute top-4 left-4 p-2 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 border-none cursor-pointer"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="absolute top-4 left-4 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                      <button 
+                        onClick={(e) => deleteProduct(e, product.id)}
+                        className="p-2 bg-red-500 hover:bg-red-600 text-white rounded-full border-none cursor-pointer shadow-lg flex items-center justify-center transition-colors font-bold"
+                        title="Excluir produto"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      {index > 0 && (
+                        <button 
+                          onClick={(e) => moveProduct(e, index, 'up')}
+                          className="p-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-full border-none cursor-pointer shadow-lg flex items-center justify-center transition-colors font-bold"
+                          title="Mover para cima"
+                        >
+                          <ArrowUp size={16} />
+                        </button>
+                      )}
+                      {index < sortedProducts.length - 1 && (
+                        <button 
+                          onClick={(e) => moveProduct(e, index, 'down')}
+                          className="p-2 bg-neutral-900 hover:bg-neutral-800 text-white rounded-full border-none cursor-pointer shadow-lg flex items-center justify-center transition-colors font-bold"
+                          title="Mover para baixo"
+                        >
+                          <ArrowDown size={16} />
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
                 <div className="p-6">

@@ -38,7 +38,7 @@ import {
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 
-import { db } from '../firebase.js';
+import { db, handleFirestoreError, OperationType } from '../firebase.js';
 import AuthContext from '../contexts/AuthContext.js';
 import { financialService } from '../services/financialService.js';
 import { Product, Quota, User, OwnershipHistory } from '../types.js';
@@ -99,38 +99,26 @@ export default function ProductDetailPage() {
   const navigate = useNavigate();
 
   const getSubdivisionMetrics = () => {
-    const parentChildrenMap: { [parentId: string]: number } = {};
-    quotas.forEach(q => {
-      if (q.parent_id) {
-        parentChildrenMap[q.parent_id] = (parentChildrenMap[q.parent_id] || 0) + 1;
-      }
-    });
-
-    let totalWeight = 0;
-    let availableWeight = 0;
-    let soldWeight = 0;
+    let totalCount = 0;
+    let availableCount = 0;
+    let soldCount = 0;
 
     quotas.forEach(q => {
       if (q.status === 'grouped') {
         return;
       }
-      let weight = 1;
-      if (q.parent_id) {
-        const totalFractions = parentChildrenMap[q.parent_id] || 1;
-        weight = 1 / totalFractions;
-      }
-      totalWeight += weight;
+      totalCount += 1;
       if (q.status === 'available') {
-        availableWeight += weight;
+        availableCount += 1;
       } else if (q.status === 'sold' || q.status === 'defaulted') {
-        soldWeight += weight;
+        soldCount += 1;
       }
     });
 
     return {
-      total: totalWeight,
-      available: availableWeight,
-      sold: soldWeight
+      total: totalCount,
+      available: availableCount,
+      sold: soldCount
     };
   };
 
@@ -301,6 +289,8 @@ export default function ProductDetailPage() {
     const managersQuery = query(managersRef, where('role', 'in', ['admin', 'manager']));
     const unsubscribeManagers = onSnapshot(managersQuery, (snapshot) => {
       setManagers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as User)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, `tenants/${tenantId}/users`);
     });
 
     return () => {

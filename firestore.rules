@@ -20,18 +20,20 @@ service cloud.firestore {
       return isSignedIn() && (
         isMasterAdmin() ||
         exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) ||
-        get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_id', '') == request.auth.uid ||
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_uid', '') == request.auth.uid
       );
     }
     
     function getUserRole(tenantId) {
-      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data.role;
+      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data.get('role', '');
     }
     
     function isAdmin(tenantId) {
       return isSignedIn() && (
         isMasterAdmin() ||
-        get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid ||
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_id', '') == request.auth.uid ||
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_uid', '') == request.auth.uid ||
         (exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)) && getUserRole(tenantId) == 'admin')
       );
     }
@@ -52,7 +54,7 @@ service cloud.firestore {
     match /tenants/{tenantId} {
       allow get: if (request.auth == null && resource.data.status == 'active') || isAuthUserOfTenant(tenantId) || isMasterAdmin();
       allow list: if (resource.data.status == 'active') || isMasterAdmin();
-      allow create: if isSignedIn() && request.resource.data.owner_id == request.auth.uid;
+      allow create: if isSignedIn() && (request.resource.data.get('owner_uid', '') == request.auth.uid || request.resource.data.get('owner_id', '') == request.auth.uid);
       allow update: if isAdmin(tenantId);
       allow delete: if false;
       
@@ -64,101 +66,118 @@ service cloud.firestore {
       
       // Tenant User Identities & PII Boundaries (Zero PII leaks)
       match /users/{userId} {
-        allow read: if isSignedIn() && (
-          request.auth.uid == userId || 
-          isMasterAdmin() || 
-          (isAuthUserOfTenant(tenantId) && (isAdmin(tenantId) || isManager(tenantId)))
-        );
+        allow read: if isSignedIn() && (request.auth.uid == userId || isAuthUserOfTenant(tenantId));
         allow create: if (
           request.auth.uid == userId && (
-            // If they are creating a user with client/manager roles, enforce that they provide a valid invite token matching the role and assigned UID
+            // Verify invite exists, is for the correct role and correct tenant, AND is either unused or a multi-use marketing link
             ((request.resource.data.role == 'client' || request.resource.data.role == 'manager') &&
              request.resource.data.invite_id != null &&
-             getAfter(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.used_by == request.auth.uid &&
-             getAfter(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.role == request.resource.data.role) ||
+             exists(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)) &&
+             get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.role == request.resource.data.role &&
+             get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.tenant_id == tenantId &&
+             (get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.get('used', false) != true ||
+              get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.resource.data.invite_id)).data.get('is_marketing', false) == true)) ||
             // Or admin role specifically verified against store owner
-            (request.resource.data.role == 'admin' && get(/databases/$(database)/documents/tenants/$(tenantId)).data.owner_id == request.auth.uid)
+            (request.resource.data.role == 'admin' && (
+              get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_id', '') == request.auth.uid ||
+              get(/databases/$(database)/documents/tenants/$(tenantId)).data.get('owner_uid', '') == request.auth.uid
+            ))
           )
-        ) || isAdmin(tenantId);
+        ) || isAdmin(tenantId) || isManager(tenantId);
         allow update: if isAuthUserOfTenant(tenantId) && (
           (request.auth.uid == userId && 
-           request.resource.data.role == resource.data.role && 
-           request.resource.data.email == resource.data.email &&
-           request.resource.data.tenant_id == resource.data.tenant_id) || 
-          isAdmin(tenantId)
+           !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'email', 'tenant_id'])) || 
+          isAdmin(tenantId) || isManager(tenantId)
         );
-        allow delete: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId) || isManager(tenantId);
+      }
+
+      // Flat Match for User Notifications
+      match /users/{userId}/notifications/{notificationId} {
+        allow read: if isSignedIn() && (request.auth.uid == userId || isMasterAdmin());
+        allow create: if isSignedIn() && isAuthUserOfTenant(tenantId);
+        allow update: if isSignedIn() && (request.auth.uid == userId || isMasterAdmin());
+        allow delete: if isSignedIn() && (request.auth.uid == userId || isMasterAdmin());
       }
       
       // Products catalog rules
       match /products/{productId} {
-        allow read: if isAuthUserOfTenant(tenantId) && (isAdmin(tenantId) || isManager(tenantId) || resource.data.status != 'draft');
+        allow read: if isAuthUserOfTenant(tenantId);
         allow create: if isAdmin(tenantId);
-        allow update: if isAdmin(tenantId);
+        allow update: if isAdmin(tenantId) || (
+          isAuthUserOfTenant(tenantId) && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['sold_quotas', 'available_quotas'])
+          )
+        );
         allow delete: if isAdmin(tenantId);
         
         // Product Chat Subcollection (Strictly isolated by tenant + product)
         match /chat/{messageId} {
           allow read: if isAuthUserOfTenant(tenantId);
-          allow create: if isAuthUserOfTenant(tenantId) && request.resource.data.user_id == request.auth.uid;
-          allow update: if isAuthUserOfTenant(tenantId) && resource.data.user_id == request.auth.uid;
+          allow create: if isAuthUserOfTenant(tenantId) && request.resource.data.userId == request.auth.uid;
+          allow update: if isAuthUserOfTenant(tenantId) && resource.data.userId == request.auth.uid;
           allow delete: if isAdmin(tenantId);
         }
       }
       
       // Fractional Quotas allocation rules
       match /quotas/{quotaId} {
-        allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && (resource.data.status == 'available' || resource.data.owner_id == request.auth.uid));
-        allow create: if isAdmin(tenantId);
-        allow update: if isAdmin(tenantId) || (
-          isClient(tenantId) && (
-            // Guard 1: Client/Customer reserves a quota for themselves
+        allow read: if isAuthUserOfTenant(tenantId);
+        allow create: if isAdmin(tenantId) || isManager(tenantId);
+        allow update: if isAdmin(tenantId) || isManager(tenantId) || (
+          isAuthUserOfTenant(tenantId) && (
+            // Guard 1: User reserves a quota for themselves
             (resource.data.status == 'available' && request.resource.data.status == 'reserved' && request.resource.data.reserved_by == request.auth.uid) ||
-            // Guard 2: Client/Customer buys directly
+            // Guard 2: User buys directly
             (resource.data.status == 'available' && request.resource.data.status == 'sold' && request.resource.data.owner_id == request.auth.uid) ||
-            // Guard 3: Client/Customer buys their reserved quota
-            (resource.data.status == 'reserved' && resource.data.reserved_by == request.auth.uid && request.resource.data.status == 'sold' && request.resource.data.owner_id == request.auth.uid)
+            // Guard 3: User buys their reserved quota
+            (resource.data.status == 'reserved' && resource.data.reserved_by == request.auth.uid && request.resource.data.status == 'sold' && request.resource.data.owner_id == request.auth.uid) ||
+            // Guard 4: User releases their own reservation
+            (resource.data.status == 'reserved' && resource.data.reserved_by == request.auth.uid && request.resource.data.status == 'available') ||
+            // Guard 5: User updates parent of grouped quota to sold when completing group purchase
+            (resource.data.status == 'grouped' && request.resource.data.status == 'sold')
           )
         );
-        allow delete: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId) || isManager(tenantId);
         
         // Cohort History
         match /ownership_history/{historyId} {
           allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && get(/databases/$(database)/documents/tenants/$(tenantId)/quotas/$(quotaId)).data.owner_id == request.auth.uid);
-          allow create, update, delete: if isAdmin(tenantId);
+          allow create: if isSignedIn() && (isAdmin(tenantId) || isManager(tenantId) || request.resource.data.user_id == request.auth.uid);
+          allow update, delete: if isAdmin(tenantId) || isManager(tenantId);
         }
       }
       
       // Ledger / Installments allocation (Financial Gatekeepers)
       match /installments/{installmentId} {
         allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && resource.data.owner_id == request.auth.uid);
-        allow create: if isAdmin(tenantId) || (isClient(tenantId) && request.resource.data.owner_id == request.auth.uid);
+        allow create: if isSignedIn() && (isAdmin(tenantId) || isManager(tenantId) || request.resource.data.owner_id == request.auth.uid);
         // Only Admin can record refunds or cancellations. Managers are restricted to manual checkouts (status: paid).
         allow update: if isAdmin(tenantId) || (
           isManager(tenantId) && 
           request.resource.data.status != 'refund' && 
           request.resource.data.status != 'cancelled'
         );
-        allow delete: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId) || isManager(tenantId);
       }
       
       // Operational Action logs (System actions are Append-only)
       match /audit_logs/{logId} {
-        allow read: if isAdmin(tenantId);
-        allow create: if isAuthUserOfTenant(tenantId);
+        allow read: if isAdmin(tenantId) || isManager(tenantId);
+        allow create: if isSignedIn() && (isAdmin(tenantId) || isManager(tenantId) || request.resource.data.user_id == request.auth.uid);
         allow update, delete: if false; // Log entries are completely immutable
       }
       
       // Regulatory term agreements and digital contracts
       match /terms/{termId} {
         allow read: if isAuthUserOfTenant(tenantId);
-        allow write: if isAdmin(tenantId);
+        allow write: if isAdmin(tenantId) || isManager(tenantId);
       }
       
       // Immutable Signatures
       match /signatures/{signatureId} {
         allow read: if isAdmin(tenantId) || isManager(tenantId) || (isClient(tenantId) && resource.data.user_id == request.auth.uid);
-        allow create: if isAdmin(tenantId) || (isClient(tenantId) && request.resource.data.user_id == request.auth.uid);
+        allow create: if isSignedIn() && (isAdmin(tenantId) || isManager(tenantId) || request.resource.data.user_id == request.auth.uid);
         allow update, delete: if false;
       }
       
@@ -169,11 +188,16 @@ service cloud.firestore {
         allow update, delete: if false;
       }
       
-      // Secure Invitation Tokens (Used for single-redeem registrations)
+      // Secure Marketing Campaign Links (Multi-use links created by Admin)
+      match /marketing_links/{linkId} {
+        allow get: if true;
+        allow list: if isAdmin(tenantId);
+        allow create, update, delete: if isAdmin(tenantId);
+      }
+
+      // Secure Invitation Tokens (Used for single-redeem registrations and marketing campaign links)
       match /invites/{inviteId} {
-        allow get: if isAdmin(tenantId) || 
-                       (isAuthUserOfTenant(tenantId) && resource.data.created_by == request.auth.uid) || 
-                       (!isAuthUserOfTenant(tenantId) && resource.data.used == false && resource.data.used_at == null);
+        allow get: if true;
         allow list: if isAdmin(tenantId) || 
                         (isAuthUserOfTenant(tenantId) && resource.data.created_by == request.auth.uid);
         allow create: if isAuthUserOfTenant(tenantId) && (
@@ -186,16 +210,12 @@ service cloud.firestore {
         ) && request.resource.data.created_by == request.auth.uid 
           && request.resource.data.tenant_id == tenantId;
         allow update: if isAdmin(tenantId) || (
-          // Allow registration consumption
-          isSignedIn() && 
-          request.resource.data.role == resource.data.role &&
-          request.resource.data.tenant_id == resource.data.tenant_id &&
-          request.resource.data.created_by == resource.data.created_by &&
-          request.resource.data.expires_at == resource.data.expires_at &&
-          (
-            request.resource.data.used == true &&
-            (request.resource.data.used_by == request.auth.uid || request.resource.data.usedBy == request.auth.uid) &&
-            (request.resource.data.used_at != null || request.resource.data.usedAt != null)
+          // Allow registration consumption or marketing conversion count update
+          isSignedIn() && (
+            (resource.data.get('used', false) != true &&
+             request.resource.data.used == true &&
+             (request.resource.data.get('used_by', '') == request.auth.uid || request.resource.data.get('usedBy', '') == request.auth.uid)) ||
+            (resource.data.get('is_marketing', false) == true)
           )
         );
         allow delete: if isAdmin(tenantId);

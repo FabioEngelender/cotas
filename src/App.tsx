@@ -5,7 +5,8 @@ import {
   Routes, 
   Route, 
   Navigate, 
-  useLocation 
+  useLocation,
+  useNavigate
 } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -18,7 +19,11 @@ import {
   Menu,
   X,
   Settings as SettingsIcon,
-  UserPlus
+  UserPlus,
+  Bell,
+  Check,
+  CheckCheck,
+  Share2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -37,7 +42,8 @@ import {
   onSnapshot, 
   writeBatch, 
   serverTimestamp, 
-  limit 
+  limit,
+  updateDoc
 } from 'firebase/firestore';
 import { AuthProvider, useAuth, ADMIN_MASTER_EMAIL } from './contexts/AuthContext.js';
 
@@ -63,6 +69,7 @@ import MyQuotasPage from './pages/MyQuotasPage.js';
 import MyPaymentsPage from './pages/MyPaymentsPage.js';
 import PaymentManagementPage from './pages/PaymentManagementPage.js';
 import SettingsPage from './pages/SettingsPage.js';
+import MarketingAnalyticsPage from './pages/MarketingAnalyticsPage.js';
 
 // --- Background Worker Utilities ---
 
@@ -121,22 +128,70 @@ const checkRecurrentDefaults = async (tenantId: string) => {
   await batch.commit();
 };
 
-const cleanupOldLogs = async (tenantId: string) => {
+const cleanupOldData = async (tenantId: string) => {
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 750);
-  
-  const q = query(
-    collection(db, 'tenants', tenantId, 'audit_logs'), 
-    where('created_at', '<', cutoff),
-    limit(100)
-  );
-  
-  const snapshot = await getDocs(q);
-  if (snapshot.empty) return;
+  cutoff.setDate(cutoff.getDate() - 730);
   
   const batch = writeBatch(db);
-  snapshot.docs.forEach(d => batch.delete(d.ref));
-  await batch.commit();
+  let hasDeletions = false;
+  
+  // 1. Audit logs older than 730 days
+  try {
+    const logsQ = query(
+      collection(db, 'tenants', tenantId, 'audit_logs'), 
+      where('created_at', '<', cutoff),
+      limit(50)
+    );
+    const logsSnap = await getDocs(logsQ);
+    logsSnap.docs.forEach(d => {
+      batch.delete(d.ref);
+      hasDeletions = true;
+    });
+  } catch (err) {
+    console.error("Error cleaning audit logs:", err);
+  }
+
+  // 2. Old client-directed notifications older than 730 days
+  try {
+    const usersSnap = await getDocs(collection(db, 'tenants', tenantId, 'users'));
+    for (const userDoc of usersSnap.docs) {
+      const notifQ = query(
+        collection(db, 'tenants', tenantId, 'users', userDoc.id, 'notifications'),
+        where('created_at', '<', cutoff),
+        limit(20)
+      );
+      const notifSnap = await getDocs(notifQ);
+      notifSnap.docs.forEach(d => {
+        batch.delete(d.ref);
+        hasDeletions = true;
+      });
+    }
+  } catch (err) {
+    console.error("Error cleaning old notifications:", err);
+  }
+
+  // 3. Old chat messages older than 730 days under products
+  try {
+    const productsSnap = await getDocs(collection(db, 'tenants', tenantId, 'products'));
+    for (const prodDoc of productsSnap.docs) {
+      const chatQ = query(
+        collection(db, 'tenants', tenantId, 'products', prodDoc.id, 'chat'),
+        where('created_at', '<', cutoff),
+        limit(20)
+      );
+      const chatSnap = await getDocs(chatQ);
+      chatSnap.docs.forEach(d => {
+        batch.delete(d.ref);
+        hasDeletions = true;
+      });
+    }
+  } catch (err) {
+    console.error("Error cleaning old chat messages:", err);
+  }
+
+  if (hasDeletions) {
+    await batch.commit();
+  }
 };
 
 const scanOrphanedInstallments = async (tenantId: string) => {
@@ -186,7 +241,7 @@ function AppContent() {
   useEffect(() => {
     if (tenantId && user && (user.role === 'admin' || user.role === 'manager')) {
       checkRecurrentDefaults(tenantId);
-      cleanupOldLogs(tenantId);
+      cleanupOldData(tenantId);
       scanOrphanedInstallments(tenantId);
     }
   }, [tenantId, user]);
@@ -251,6 +306,48 @@ function AuthenticatedApp({ settings }: { settings: any }) {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const location = useLocation();
+
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showNotificationMenu, setShowNotificationMenu] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!tenantId || !user?.id) return;
+
+    const notificationsRef = collection(db, 'tenants', tenantId, 'users', user.id, 'notifications');
+    const q = query(notificationsRef, where('read', '==', false));
+
+    return onSnapshot(q, (snapshot) => {
+      setNotifications(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => {
+      console.error("Error loading notifications:", error);
+    });
+  }, [tenantId, user?.id]);
+
+  const handleNotificationClick = async (notif: any) => {
+    try {
+      const notifRef = doc(db, 'tenants', tenantId!, 'users', user.id, 'notifications', notif.id);
+      await updateDoc(notifRef, { read: true });
+      setShowNotificationMenu(false);
+      navigate(`/products/${notif.productId}/chat?mention=${user.id}`);
+    } catch (err) {
+      console.error("Error clicking notification:", err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    const batch = writeBatch(db);
+    notifications.forEach(notif => {
+      const notifRef = doc(db, 'tenants', tenantId!, 'users', user.id, 'notifications', notif.id);
+      batch.update(notifRef, { read: true });
+    });
+    try {
+      await batch.commit();
+      setShowNotificationMenu(false);
+    } catch (err) {
+      console.error("Error marking all read:", err);
+    }
+  };
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -378,7 +475,10 @@ function AuthenticatedApp({ settings }: { settings: any }) {
             <SidebarLink to="/audit" icon={<Shield size={20} />} label="Auditoria" isOpen={showLabels} />
           )}
           {user.role === 'admin' && (
-            <SidebarLink to="/settings" icon={<SettingsIcon size={20} />} label="Configurações" isOpen={showLabels} />
+            <>
+              <SidebarLink to="/marketing" icon={<Share2 size={20} />} label="Divulgação & Metrics" isOpen={showLabels} />
+              <SidebarLink to="/settings" icon={<SettingsIcon size={20} />} label="Configurações" isOpen={showLabels} />
+            </>
           )}
           <button 
             type="button"
@@ -433,10 +533,105 @@ function AuthenticatedApp({ settings }: { settings: any }) {
             <Route path="/my-payments" element={<MyPaymentsPage settings={settings} />} />
             <Route path="/payments" element={<PaymentManagementPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/marketing" element={user.role === 'admin' ? <MarketingAnalyticsPage /> : <Navigate to="/products" />} />
             <Route path="/*" element={<Navigate to="/" />} />
           </Routes>
         </div>
       </main>
+
+      {/* Floating Yellow Bell Indicator - Repositioned to top-middle for priority client attention */}
+      {notifications.length > 0 && (
+        <div className="fixed top-20 lg:top-6 left-1/2 -translate-x-1/2 z-[95] flex flex-col items-center gap-3">
+          {/* Floating Yellow Bell Button */}
+          <motion.button
+            key="notification-bell"
+            animate={{
+              rotate: [0, -10, 10, -10, 10, 0],
+              scale: [1, 1.05, 1],
+            }}
+            transition={{
+              rotate: {
+                repeat: Infinity,
+                duration: 2.5,
+                ease: "easeInOut",
+                repeatDelay: 5
+              },
+              scale: {
+                repeat: Infinity,
+                duration: 2.5,
+                ease: "easeInOut",
+                repeatDelay: 5
+              }
+            }}
+            onClick={() => setShowNotificationMenu(!showNotificationMenu)}
+            className="w-14 h-14 rounded-full bg-amber-400 hover:bg-amber-500 text-black flex items-center justify-center shadow-xl border border-amber-500/20 shadow-amber-400/30 transition-all hover:scale-110 active:scale-95 cursor-pointer relative animate-bounce"
+            title="Novas mensagens direcionadas"
+          >
+            <Bell size={24} className="animate-pulse" />
+            <span className="absolute -top-1 -right-1 bg-black text-white text-[9px] font-black font-mono w-5 h-5 rounded-full flex items-center justify-center border border-amber-400">
+              {notifications.length}
+            </span>
+          </motion.button>
+
+          {/* Dropdown Menu below the button */}
+          <AnimatePresence>
+            {showNotificationMenu && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: -10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: -10 }}
+                className="bg-white rounded-3xl p-6 border border-black/5 shadow-2xl w-80 max-w-sm flex flex-col space-y-4 max-h-[400px] overflow-hidden"
+              >
+                <div className="flex items-center justify-between border-b border-black/5 pb-3">
+                  <span className="font-bold text-sm text-black">Atenção com Clientes</span>
+                  <button 
+                    onClick={handleMarkAllAsRead}
+                    className="text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <CheckCheck size={12} /> Marcar lidas
+                  </button>
+                </div>
+                <div className="flex-grow overflow-y-auto space-y-3 pr-1 max-h-[250px]">
+                  {notifications.map((notif) => (
+                    <div 
+                      key={notif.id}
+                      className="p-3 bg-black/5 hover:bg-black/10 rounded-2xl transition-all text-xs flex flex-col gap-1.5 relative group cursor-pointer"
+                      onClick={() => handleNotificationClick(notif)}
+                    >
+                      <div className="flex justify-between items-start gap-2">
+                        <p className="font-bold text-black leading-snug">
+                          {notif.fromUserName || 'Cliente'}
+                        </p>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const notifRef = doc(db, 'tenants', tenantId!, 'users', user.id, 'notifications', notif.id);
+                              await updateDoc(notifRef, { read: true });
+                            } catch (err) {
+                              console.error(err);
+                            }
+                          }}
+                          className="p-1 hover:bg-black/10 rounded text-black/40 hover:text-emerald-600 transition-all cursor-pointer"
+                          title="Marcar como lida"
+                        >
+                          <Check size={12} />
+                        </button>
+                      </div>
+                      <p className="text-black/60 italic font-mono text-[10px] truncate max-w-full">
+                        "{notif.message}"
+                      </p>
+                      <p className="text-[9px] text-[#141414]/40 font-semibold self-end">
+                        Ativo: {notif.productName}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

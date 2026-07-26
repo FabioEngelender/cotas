@@ -41,7 +41,8 @@ export function InviteModal({ isOpen, onClose, tenantId, userRole }: InviteModal
         used_at: null,
         used_by: null,
         created_at: serverTimestamp(),
-        created_by: auth.currentUser?.uid || 'Sistema'
+        created_by: auth.currentUser?.uid || 'Sistema',
+        created_by_name: auth.currentUser?.displayName || (auth.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Usuário')
       });
 
       // 4. Construct register Link

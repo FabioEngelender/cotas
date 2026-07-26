@@ -45,6 +45,7 @@ export function RegisterClient() {
   const [isInviteValid, setIsInviteValid] = useState<boolean | null>(null);
   const [inviteError, setInviteError] = useState('');
   const navigate = useNavigate();
+  const { setTenantId } = useAuth();
 
   React.useEffect(() => {
     const fetchInvite = async () => {
@@ -67,7 +68,7 @@ export function RegisterClient() {
           setInviteError('Este link não é correspondente a uma conta de investidor.');
           return;
         }
-        if (data.used_at) {
+        if (!data.is_marketing && data.used_at) {
           setIsInviteValid(false);
           setInviteError('Este código de convite de uso único já foi utilizado.');
           return;
@@ -76,7 +77,7 @@ export function RegisterClient() {
         const expiresAt = new Date(data.expires_at);
         if (expiresAt < now) {
           setIsInviteValid(false);
-          setInviteError('Este convite está expirado (validez máxima de 7 dias).');
+          setInviteError('Este convite está expirado.');
           return;
         }
         setIsInviteValid(true);
@@ -119,7 +120,8 @@ export function RegisterClient() {
       }
       
       const prelimData = inviteSnap.data();
-      const isPrelimUsed = prelimData.used === true || !!prelimData.used_at || !!prelimData.usedAt;
+      const isMarketingLink = prelimData.is_marketing === true;
+      const isPrelimUsed = !isMarketingLink && (prelimData.used === true || !!prelimData.used_at || !!prelimData.usedAt);
       if (isPrelimUsed) {
         throw new Error('Este código de convite de uso único já foi utilizado.');
       }
@@ -131,30 +133,6 @@ export function RegisterClient() {
 
       if (prelimData.role !== 'client') {
         throw new Error('O papel do convite não coincide com a rota de cadastro de cliente.');
-      }
-
-      const tenantUsersRef = collection(db, 'tenants', inviteTenantId, 'users');
-
-      // Check for CPF uniqueness inside this tenant
-      if (formData.cpf) {
-        const cleanCPF = formData.cpf.replace(/\D/g, '');
-        const formattedCPF = maskCPF(cleanCPF);
-        const cpfQuery = query(tenantUsersRef, where('cpf', '==', formattedCPF));
-        const cpfSnap = await getDocs(cpfQuery);
-        if (!cpfSnap.empty) {
-          const matchedUser = cpfSnap.docs[0].data();
-          if (matchedUser.email.toLowerCase() !== formData.email.toLowerCase()) {
-            throw new Error(`O documento de CPF informado já está associado a outro usuário cadastrado nesta loja.`);
-          }
-        }
-      }
-      
-      // Check if email is already in this tenant's users
-      const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
-      const emailSnap = await getDocs(emailQuery);
-      
-      if (!emailSnap.empty) {
-        throw new Error('E-mail já cadastrado nesta loja.');
       }
 
       if (auth.currentUser && auth.currentUser.email === formData.email.toLowerCase()) {
@@ -170,7 +148,7 @@ export function RegisterClient() {
               const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
               firebaseUser = userCredential.user;
             } catch (signInErr: any) {
-              throw new Error('Este e-mail já está em uso em outra loja. Por favor, use a mesma senha ou outro e-mail.');
+              throw new Error('Este e-mail já está em uso neste sistema. Por favor, utilize a senha correspondente ou informe outro endereço de e-mail.');
             }
           } else {
             throw authErr;
@@ -182,7 +160,7 @@ export function RegisterClient() {
 
       const { password, ...dataToSave } = formData;
 
-      // 2. Atomic Transaction for single-use consumption
+      // 2. Atomic Transaction for single-use consumption or marketing conversion
       await runTransaction(db, async (transaction) => {
         const transactionInviteSnap = await transaction.get(inviteDocRef);
         
@@ -200,7 +178,8 @@ export function RegisterClient() {
           throw new Error('Este convite está expirado.');
         }
 
-        const isAlreadyUsed = inviteData.used === true || !!inviteData.used_at || !!inviteData.usedAt;
+        const isMarketing = inviteData.is_marketing === true;
+        const isAlreadyUsed = !isMarketing && (inviteData.used === true || !!inviteData.used_at || !!inviteData.usedAt);
         if (isAlreadyUsed) {
           throw new Error('Este convite de uso único já foi utilizado.');
         }
@@ -215,23 +194,68 @@ export function RegisterClient() {
 
         const now = new Date();
 
-        // Mark as consumed
-        transaction.update(inviteDocRef, {
-          used: true,
-          used_by: firebaseUser.uid,
-          usedBy: firebaseUser.uid,
-          used_at: now.toISOString(),
-          usedAt: now.toISOString()
-        });
-
-        // Set user profile using strictly the role from the invite to prevent role parameter hijacking
+        // Check if user already exists in this tenant
         const userRef = doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid);
+        const userSnap = await transaction.get(userRef);
+        if (userSnap.exists()) {
+          throw new Error('Este e-mail já possui um perfil ativo de investidor nesta plataforma.');
+        }
+
+        let referrerUid = inviteData.created_by && inviteData.created_by !== 'Sistema' ? inviteData.created_by : null;
+        let referrerName = inviteData.created_by_name || null;
+
+        if (referrerUid && !referrerName) {
+          const referrerDocRef = doc(db, 'tenants', inviteTenantId, 'users', referrerUid);
+          const referrerSnap = await transaction.get(referrerDocRef);
+          if (referrerSnap.exists()) {
+            const rData = referrerSnap.data();
+            referrerName = rData.name || rData.email || 'Cliente';
+          }
+        }
+
+        if (isMarketing) {
+          // Increment conversion count on marketing invite
+          const currentCount = inviteData.conversion_count || 0;
+          transaction.update(inviteDocRef, {
+            conversion_count: currentCount + 1,
+            last_conversion_at: now.toISOString()
+          });
+
+          // Also update marketing_links collection if available
+          if (inviteData.marketing_link_id) {
+            const mktRef = doc(db, 'tenants', inviteTenantId, 'marketing_links', inviteData.marketing_link_id);
+            const mktSnap = await transaction.get(mktRef);
+            if (mktSnap.exists()) {
+              transaction.update(mktRef, {
+                conversion_count: (mktSnap.data().conversion_count || 0) + 1,
+                last_conversion_at: now.toISOString()
+              });
+            }
+          }
+        } else {
+          // Mark single-use invite as consumed
+          transaction.update(inviteDocRef, {
+            used: true,
+            used_by: firebaseUser.uid,
+            usedBy: firebaseUser.uid,
+            used_at: now.toISOString(),
+            usedAt: now.toISOString()
+          });
+        }
+
+        // Set user profile with full tracking metadata
         transaction.set(userRef, {
           ...dataToSave,
           email: firebaseUser.email,
-          role: inviteData.role, // EXCLUSIVELY BIND ROLE
+          role: inviteData.role,
           tenant_id: inviteTenantId,
-          invite_id: inviteToken, // STRICT PROTOCOL SECURITY TO PREVENT ESCALATION
+          invite_id: inviteToken,
+          referral_type: isMarketing ? 'marketing_link' : (referrerUid ? 'client_invite' : 'direct'),
+          marketing_link_id: isMarketing ? (inviteData.marketing_link_id || inviteToken) : null,
+          marketing_platform: inviteData.marketing_platform || (isMarketing ? 'Divulgação' : (referrerUid ? 'Indicação de Amigo' : 'Convite Direto')),
+          marketing_campaign_name: inviteData.marketing_campaign_name || null,
+          referrer_uid: referrerUid,
+          referrer_name: referrerName,
           created_at: serverTimestamp()
         });
 
@@ -246,10 +270,20 @@ export function RegisterClient() {
         });
       });
 
+      if (inviteTenantId) {
+        setTenantId(inviteTenantId);
+      }
       alert('Cadastro realizado com sucesso!');
       navigate('/');
     } catch (err: any) {
-      console.error(err);
+      console.error('Erro de cadastro de cliente:', err);
+      if (err.code === 'permission-denied' || String(err.message).toLowerCase().includes('permission')) {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, `tenants/${inviteTenantId || 'unknown'}/users/${auth.currentUser?.uid || 'temp'}`);
+        } catch (fErr) {
+          // Log formatting is done, proceed
+        }
+      }
 
       // Rollback Auth user if transaction fails or invite was already claimed!
       if (didCreateAuthUser && firebaseUser) {
@@ -698,6 +732,7 @@ export function RegisterManager() {
   const [isInviteValid, setIsInviteValid] = useState<boolean | null>(null);
   const [inviteError, setInviteError] = useState('');
   const navigate = useNavigate();
+  const { setTenantId } = useAuth();
 
   React.useEffect(() => {
     const fetchInvite = async () => {
@@ -778,14 +813,6 @@ export function RegisterManager() {
         throw new Error('O papel do convite não coincide com a rota de cadastro de gerente.');
       }
 
-      const tenantUsersRef = collection(db, 'tenants', inviteTenantId, 'users');
-      const emailQuery = query(tenantUsersRef, where('email', '==', formData.email.toLowerCase()));
-      const emailSnap = await getDocs(emailQuery);
-      
-      if (!emailSnap.empty) {
-        throw new Error('E-mail já cadastrado nesta loja.');
-      }
-
       if (auth.currentUser && auth.currentUser.email === formData.email.toLowerCase()) {
         firebaseUser = auth.currentUser;
       } else {
@@ -799,7 +826,7 @@ export function RegisterManager() {
               const userCredential = await signInWithEmailAndPassword(auth, formData.email, formData.password);
               firebaseUser = userCredential.user;
             } catch (signInErr: any) {
-              throw new Error('Este e-mail já está em uso em outra loja. Por favor, use a mesma senha ou outro e-mail.');
+              throw new Error('Este e-mail já está em uso neste sistema. Por favor, utilize a senha correspondente ou informe outro endereço de e-mail.');
             }
           } else {
             throw authErr;
@@ -842,6 +869,13 @@ export function RegisterManager() {
 
         const now = new Date();
 
+        // Check if user already exists in this tenant
+        const userRef = doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid);
+        const userSnap = await transaction.get(userRef);
+        if (userSnap.exists()) {
+          throw new Error('Este e-mail já possui um perfil ativo de gerente nesta plataforma.');
+        }
+
         // Mark as consumed
         transaction.update(inviteDocRef, {
           used: true,
@@ -852,7 +886,6 @@ export function RegisterManager() {
         });
 
         // Set user profile using strictly the role from the invite to prevent role parameter hijacking
-        const userRef = doc(db, 'tenants', inviteTenantId, 'users', firebaseUser.uid);
         transaction.set(userRef, {
           name: formData.name,
           email: formData.email,
@@ -873,10 +906,20 @@ export function RegisterManager() {
         });
       });
 
+      if (inviteTenantId) {
+        setTenantId(inviteTenantId);
+      }
       alert('Gerente cadastrado com sucesso!');
       navigate('/');
     } catch (err: any) {
-      console.error(err);
+      console.error('Erro de cadastro de gerente:', err);
+      if (err.code === 'permission-denied' || String(err.message).toLowerCase().includes('permission')) {
+        try {
+          handleFirestoreError(err, OperationType.WRITE, `tenants/${inviteTenantId || 'unknown'}/users/${auth.currentUser?.uid || 'temp'}`);
+        } catch (fErr) {
+          // Log formatting is done, proceed
+        }
+      }
 
       // Rollback Auth user if transaction fails or invite was already claimed!
       if (didCreateAuthUser && firebaseUser) {

@@ -19,6 +19,29 @@ import AuthContext from '../contexts/AuthContext.js';
 import { Product, ChatMessage } from '../types.js';
 import { cn } from '../utils/cn.js';
 
+function getMessageTime(created_at: any): number {
+  if (!created_at) {
+    return Date.now() + 60000; // local optimistic sorting
+  }
+  if (typeof created_at.toDate === 'function') {
+    return created_at.toDate().getTime();
+  }
+  if (created_at.seconds !== undefined) {
+    return created_at.seconds * 1000 + Math.floor((created_at.nanoseconds || 0) / 1000000);
+  }
+  if (created_at instanceof Date) {
+    return created_at.getTime();
+  }
+  if (typeof created_at === 'number') {
+    return created_at;
+  }
+  if (typeof created_at === 'string') {
+    const t = Date.parse(created_at);
+    return isNaN(t) ? Date.now() : t;
+  }
+  return Date.now();
+}
+
 export default function ProductChatPage() {
   const { id } = useParams();
   const location = useLocation();
@@ -46,7 +69,11 @@ export default function ProductChatPage() {
     const q = query(chatRef, orderBy('created_at', 'asc'), limit(100));
     
     return onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+      const docs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      docs.sort((a: any, b: any) => getMessageTime(a.created_at) - getMessageTime(b.created_at));
+      setMessages(docs);
+    }, (error) => {
+      console.error("Error in chat subscription:", error);
     });
   }, [id, tenantId]);
 
@@ -62,13 +89,29 @@ export default function ProductChatPage() {
 
     try {
       const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
-      await addDoc(chatRef, {
+      const chatDoc = await addDoc(chatRef, {
         userId: user.id,
         userName: user.name,
         message: input,
         mentionUserId: mentionUserId || null,
         created_at: serverTimestamp()
       });
+
+      if (mentionUserId && mentionUserId !== user.id) {
+        const notificationsRef = collection(db, 'tenants', tenantId, 'users', mentionUserId, 'notifications');
+        await addDoc(notificationsRef, {
+          type: 'chat_mention',
+          fromUserId: user.id,
+          fromUserName: user.name,
+          productId: id,
+          productName: product?.name || '',
+          message: input,
+          messageId: chatDoc.id,
+          created_at: serverTimestamp(),
+          read: false
+        });
+      }
+
       setInput('');
     } catch (err) {
       console.error(err);
@@ -104,7 +147,7 @@ export default function ProductChatPage() {
       console.log("URL de download obtida:", downloadURL);
 
       const chatRef = collection(db, 'tenants', tenantId, 'products', id, 'chat');
-      await addDoc(chatRef, {
+      const chatDoc = await addDoc(chatRef, {
         userId: user.id,
         userName: user.name,
         message: `Enviou um arquivo: ${file.name}`,
@@ -113,8 +156,24 @@ export default function ProductChatPage() {
         fileType: file.type,
         fileSize: file.size,
         isManagerUpload: user.role === 'admin' || user.role === 'manager',
+        mentionUserId: mentionUserId || null,
         created_at: serverTimestamp()
       });
+
+      if (mentionUserId && mentionUserId !== user.id) {
+        const notificationsRef = collection(db, 'tenants', tenantId, 'users', mentionUserId, 'notifications');
+        await addDoc(notificationsRef, {
+          type: 'chat_mention',
+          fromUserId: user.id,
+          fromUserName: user.name,
+          productId: id,
+          productName: product?.name || '',
+          message: `Enviou um arquivo: ${file.name}`,
+          messageId: chatDoc.id,
+          created_at: serverTimestamp(),
+          read: false
+        });
+      }
       
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err: any) {
