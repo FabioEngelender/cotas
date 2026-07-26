@@ -31,7 +31,7 @@ import {
   onSnapshot, 
   serverTimestamp 
 } from 'firebase/firestore';
-import { db, auth } from '../firebase.js';
+import { db, auth, handleFirestoreError, OperationType } from '../firebase.js';
 import { useAuth } from '../contexts/AuthContext.js';
 import { cn } from '../utils/cn.js';
 
@@ -160,6 +160,12 @@ export default function MarketingAnalyticsPage() {
     if (!name.trim()) return;
     if (!tenantId) return;
 
+    const currentUid = auth.currentUser?.uid || user?.id || user?.uid;
+    if (!currentUid) {
+      alert('Sessão do usuário não identificada. Por favor, recarregue a página ou faça login novamente.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       // Create marketing link ID
@@ -169,6 +175,8 @@ export default function MarketingAnalyticsPage() {
       // 1-year expiry or perpetual
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 365);
+
+      const creatorName = user?.name || user?.email || (auth.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Admin');
 
       // Create invite record so auth transaction validates it natively
       const inviteRef = doc(db, 'tenants', tenantId, 'invites', linkId);
@@ -180,12 +188,13 @@ export default function MarketingAnalyticsPage() {
         is_marketing: true,
         marketing_link_id: linkId,
         marketing_platform: platform,
-        marketing_campaign_name: name,
+        marketing_campaign_name: name.trim(),
         expires_at: expiresAt.toISOString(),
         used_at: null,
         used_by: null,
         created_at: serverTimestamp(),
-        created_by: auth.currentUser?.uid || 'Admin'
+        created_by: currentUid,
+        created_by_name: creatorName
       });
 
       // Save marketing link record
@@ -198,7 +207,8 @@ export default function MarketingAnalyticsPage() {
         conversion_count: 0,
         status: 'active',
         created_at: serverTimestamp(),
-        created_by: auth.currentUser?.uid || 'Admin'
+        created_by: currentUid,
+        created_by_name: creatorName
       });
 
       // Reset form
@@ -206,9 +216,10 @@ export default function MarketingAnalyticsPage() {
       setNotes('');
       setShowCreateModal(false);
       alert('Link de divulgação criado com sucesso!');
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error creating marketing link:", err);
-      alert('Erro ao criar link de divulgação.');
+      handleFirestoreError(err, OperationType.WRITE, `tenants/${tenantId}/marketing_links`);
+      alert(`Erro ao criar link de divulgação: ${err?.message || 'Permissão negada ou falha de conexão.'}`);
     } finally {
       setSubmitting(false);
     }
